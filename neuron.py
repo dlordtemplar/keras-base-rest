@@ -8,6 +8,7 @@ from flask import (
 from keras import backend as K
 from keras.models import model_from_json
 from keras.preprocessing.sequence import pad_sequences
+from sklearn.manifold import TSNE
 
 from loading_preprocessing_TC import *
 
@@ -32,6 +33,9 @@ MAX_LENGTH = 200
 
 # defaults values for the visualization pages
 DEFAULT_NUM_TEXTS = 5
+
+# Pair
+DEFAULT_PERPLEXITY = 5
 
 
 @bp.before_app_first_request
@@ -442,4 +446,215 @@ def display_neuron(neuron):
                     'indexed_highlighted_correct_answers': indexed_highlighted_correct_answers,
                     'indexed_wrong_answers': indexed_wrong_answers,
                     'indexed_highlighted_wrong_answers': indexed_highlighted_wrong_answers
+                    })
+
+
+def tsne_plot(model, labels, correct_answers, wrong_answers, question, perplexity=40):
+    """Creates a TSNE model and plots it"""
+
+    tokens = []
+    for word in model.keys():
+        tokens.append(model[word])
+
+    tsne_model = TSNE(perplexity=perplexity, n_components=2, init='pca', n_iter=2500, random_state=23,
+                      metric="cosine")
+    # list of x y values in format (x, y)
+    new_values = tsne_model.fit_transform(tokens)
+
+    trace_question_x = []
+    trace_ca_x = []
+    trace_wa_x = []
+    trace_question_y = []
+    trace_ca_y = []
+    trace_wa_y = []
+    trace_question_text = []
+    trace_ca_text = []
+    trace_wa_text = []
+    trace_question_hovertext = []
+    trace_ca_hovertext = []
+    trace_wa_hovertext = []
+
+    ca_index = 0
+    wa_index = 0
+    for label_index in range(len(labels)):
+        if labels[label_index] == 'q':
+            trace_question_x.append(new_values[label_index][0])
+            trace_question_y.append(new_values[label_index][1])
+            trace_question_text.append('Q')
+            trace_question_hovertext.append(question)
+        elif labels[label_index] == 'ca':
+            trace_ca_x.append(new_values[label_index][0])
+            trace_ca_y.append(new_values[label_index][1])
+            trace_ca_text.append('CA' + str(len(trace_ca_x)))
+            trace_ca_hovertext.append(correct_answers[ca_index])
+            ca_index += 1
+        elif labels[label_index] == 'wa':
+            trace_wa_x.append(new_values[label_index][0])
+            trace_wa_y.append(new_values[label_index][1])
+            trace_wa_text.append('WA' + str(len(trace_wa_x)))
+            trace_wa_hovertext.append(wrong_answers[wa_index])
+            wa_index += 1
+
+    marker_blue = {
+        'size': 20,
+        'color': 'rgb(0, 0, 255)',
+        # star
+        'symbol': 17
+    }
+    marker_green = {
+        'size': 20,
+        'color': 'rgb(0, 204, 0)',
+        # circle
+        'symbol': 0
+    }
+    marker_red = {
+        'size': 20,
+        'color': 'rgb(255, 0, 0)',
+        # x
+        'symbol': 4
+    }
+    trace_question = {
+        'name': 'Question',
+        'x': trace_question_x,
+        'y': trace_question_y,
+        'type': 'scatter',
+        'mode': 'markers+text',
+        'hoverinfo': 'text',
+        'hovertext': trace_question_hovertext,
+        'text': trace_question_text,
+        'textposition': 'top right',
+        'marker': marker_blue
+    }
+    trace_ca = {
+        'name': 'Correct answer',
+        'x': trace_ca_x,
+        'y': trace_ca_y,
+        'type': 'scatter',
+        'mode': 'markers+text',
+        'hoverinfo': 'text',
+        'hovertext': trace_ca_hovertext,
+        'text': trace_ca_text,
+        'textposition': 'top right',
+        'marker': marker_green
+    }
+    trace_wa = {
+        'name': 'Wrong answer',
+        'x': trace_wa_x,
+        'y': trace_wa_y,
+        'type': 'scatter',
+        'mode': 'markers+text',
+        'hoverinfo': 'text',
+        'hovertext': trace_wa_hovertext,
+        'text': trace_wa_text,
+        'textposition': 'top right',
+        'marker': marker_red
+    }
+    plotly_tsne = [trace_question, trace_ca, trace_wa]
+
+    plotly_tsne_as_json = pd.Series(plotly_tsne).to_json(orient='values')
+
+    return plotly_tsne_as_json
+
+
+@bp.route('/pair', defaults={'pair_num': 0}, strict_slashes=False, methods=['GET', 'POST'])
+@bp.route('/pair/<int:pair_num>', strict_slashes=False, methods=['GET', 'POST'])
+def pair(pair_num):
+    global answer_texts, qa_pairs, vocabulary_inv, model
+    perplexity = int(request.args.get('perplexity'))
+    neuron_display_ca = request.args.get('neuron_display_ca')
+    if neuron_display_ca != 'None':
+        neuron_display_ca = int(neuron_display_ca)
+    neuron_display_wa = request.args.get('neuron_display_wa')
+    if neuron_display_wa != 'None':
+        neuron_display_wa = int(neuron_display_wa)
+    scale = request.args.get('scale')
+
+    if pair_num >= len(qa_pairs):
+        return 'Index out of bounds.'
+
+    row = qa_pairs.iloc[pair_num]
+    correct_answers = answer_texts.loc[row['answer_ids']]['answer'].values
+    wrong_answers = answer_texts.loc[row['pool']]['answer'].values
+    question = row['question']
+    q_tokens, q_padded_tokens = prepare_data([question])
+    ca_tokens, ca_padded_tokens = prepare_data(correct_answers)
+    wa_tokens, wa_padded_tokens = prepare_data(wrong_answers)
+    all_function_deep, output_function_deep = visualize_model_deep(model, False)
+    if len(correct_answers) > 0:
+        scores_ca, rnn_values_ca = all_function_deep([q_padded_tokens * len(correct_answers), ca_padded_tokens])
+        neuron_num = rnn_values_ca.shape[-1]
+    else:
+        scores_ca = []
+        rnn_values_ca = []
+    if len(wrong_answers) > 0:
+        scores_wa, rnn_values_wa = all_function_deep([q_padded_tokens * len(wrong_answers), wa_padded_tokens])
+        neuron_num = rnn_values_wa.shape[-1]
+    else:
+        scores_wa = []
+        rnn_values_wa = []
+
+    # generate TSNE
+    labels = ['q'] + ['ca'] * len(correct_answers) + ['wa'] * len(wrong_answers)
+    model_dict_wa = {}
+    model_dict_ca = {}
+    if len(correct_answers) > 0:
+        model_dict_ca = {i + 1: np.max(rnn_values_ca[i, :, :], axis=1) for i in range(len(correct_answers))}
+    if len(wrong_answers) > 0:
+        model_dict_wa = {i + 1: np.max(rnn_values_wa[i - len(correct_answers), :, :], axis=1) for i in
+                         range(len(correct_answers), len(wrong_answers) + len(correct_answers))}
+    model_dict = {**model_dict_ca, **model_dict_wa}
+    all_function_deep_q, output_function_deep_q = visualize_model_deep(model, True)
+    _, rnn_values = all_function_deep_q([q_padded_tokens, [ca_padded_tokens[0]]])
+    question_vector = rnn_values[0]
+    model_dict[0] = np.max(question_vector, axis=1)
+    plotly_tsne = tsne_plot(model_dict, labels, correct_answers, wrong_answers, question, perplexity)
+
+    # plotly
+    pl_ca_heatmaps = []
+    pl_wa_heatmaps = []
+    # generate heatmaps
+    # plotly
+    if len(correct_answers) > 0:
+        for idx in range(0, len(ca_tokens)):
+            words = [vocabulary_inv[x] for x in ca_tokens[idx]]
+            heatmap_points = {'z': rnn_values_ca[idx, -len(ca_tokens[idx]):, :].tolist(),
+                              'y': words,
+                              'type': 'heatmap'}
+            pl_ca_heatmaps.append(heatmap_points)
+    # Same as above, but for wrong answers
+    if len(wrong_answers) > 0:
+        for idx in range(0, len(wa_tokens)):
+            words = [vocabulary_inv[x] for x in wa_tokens[idx]]
+            heatmap_points = {'z': rnn_values_wa[idx, -len(wa_tokens[idx]):, :].tolist(),
+                              'y': words,
+                              'type': 'heatmap'}
+            pl_wa_heatmaps.append(heatmap_points)
+
+    # generate text highlighting based on neuron activity
+    highlighted_correct_answers = correct_answers.tolist()
+    highlighted_wrong_answers = wrong_answers.tolist()
+
+    if neuron_display_ca != 'None':
+        highlighted_correct_answers = highlight_neuron(rnn_values_ca, correct_answers, ca_tokens, scale,
+                                                       neuron_display_ca)
+    if neuron_display_wa != 'None':
+        highlighted_wrong_answers = highlight_neuron(rnn_values_wa, wrong_answers, wa_tokens, scale, neuron_display_wa)
+
+    return jsonify({'question': question,
+                    'highlighted_wrong_answers': highlighted_wrong_answers,
+                    'highlighted_correct_answers': highlighted_correct_answers,
+                    'wrong_answers': wrong_answers.tolist(),
+                    'correct_answers': correct_answers.tolist(),
+                    'pair_num': pair_num,
+                    'neuron_num': neuron_num,
+                    'neuron_display_ca': neuron_display_ca,
+                    'neuron_display_wa': neuron_display_wa,
+                    'scale': scale,
+                    'texts_len': len(qa_pairs),
+                    'scores_ca': scores_ca.tolist(),
+                    'scores_wa': scores_wa.tolist(),
+                    # plotly
+                    'plotly_tsne': plotly_tsne,
+                    'pl_ca_heatmaps': pl_ca_heatmaps,
+                    'pl_wa_heatmaps': pl_wa_heatmaps
                     })
