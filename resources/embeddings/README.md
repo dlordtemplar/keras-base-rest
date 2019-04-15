@@ -1,0 +1,1 @@
+Add "glove.6B.300d.txt" and "GoogleNews-vectors-negative300.bin" to this folder.
