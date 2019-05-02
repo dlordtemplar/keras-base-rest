@@ -1,9 +1,9 @@
 import pickle
-import random
+import json
 
 import tensorflow as tf
 from flask import (
-    Blueprint, request, session, jsonify
+    Blueprint, request, jsonify
 )
 from keras import backend as K
 from keras.models import model_from_json
@@ -171,84 +171,14 @@ def highlight_neuron(rnn_values, texts, tokens, scale, neuron):
     return texts
 
 
-@bp.route('/neuron', defaults={'neuron': 0}, strict_slashes=False, methods=['GET', 'POST'])
-@bp.route('/neuron/<int:neuron>', strict_slashes=False, methods=['GET', 'POST'])
-def display_neuron(neuron):
+@bp.route('/neuron', strict_slashes=False, methods=['GET', 'POST'])
+def display_neuron():
     global answer_texts, qa_pairs, vocabulary_inv, model
 
-    # Parameters
-    if 'random' in session.keys():
-        old_session_random = session['random']
-    if 'num_texts' in session.keys():
-        old_session_num_texts = session['num_texts']
-
-    parameter_changed = False
-    if 'random' in session.keys():
-        old_session_random = session['random']
-    else:
-        old_session_random = False
-
-    if request.method == 'POST':
-        if 'scale' in request.values.keys():
-            session['scale'] = True
-        else:
-            if 'scale' in session.keys():
-                if session['scale']:
-                    session['scale'] = False
-            else:
-                session['scale'] = False
-
-        if 'random' in request.values.keys():
-            session['random'] = True
-            session['manual_indices'] = False
-            parameter_changed = True
-        else:
-            if 'random' in session.keys():
-                if session['random']:
-                    session['random'] = False
-                    parameter_changed = True
-            else:
-                session['random'] = False
-
-        if 'texts_number' in request.values.keys():
-            if request.values['texts_number'] != '':
-                session['num_texts'] = int(request.values['texts_number'])
-                parameter_changed = True
-            elif 'num_texts' not in session.keys():
-                session['num_texts'] = DEFAULT_NUM_TEXTS
-        elif 'num_texts' not in session.keys():
-            session['num_texts'] = DEFAULT_NUM_TEXTS
-
-        if 'texts_indices' in request.values.keys():
-            if request.values['texts_indices'] != '':
-                parameter_changed = True
-                if request.values['texts_indices'] == 'all':
-                    session['indices'] = list(range(len(qa_pairs)))
-                else:
-                    session['indices'] = [int(x) for x in
-                                          request.values['texts_indices'].replace(' ', '').split(',') if
-                                          x != '']
-                session['num_texts'] = len(session['indices'])
-                session['manual_indices'] = True
-        else:
-            if 'manual_indices' not in session.keys():
-                session['manual_indices'] = False
-    else:
-        if 'manual_indices' not in session.keys():
-            session['manual_indices'] = False
-        if 'scale' not in session.keys():
-            session['scale'] = False
-        if 'random' not in session.keys():
-            session['random'] = False
-        if 'num_texts' not in session.keys():
-            session['num_texts'] = DEFAULT_NUM_TEXTS
-
-    if not session['manual_indices']:
-        if session['random']:
-            if old_session_random != session['random'] or old_session_num_texts != session['num_texts']:
-                session['indices'] = random.sample(range(0, len(qa_pairs)), session['num_texts'])
-        else:
-            session['indices'] = list(range(0, session['num_texts']))
+    print(request.data)
+    data = json.loads(request.data)
+    indices = data['indices']
+    neuron = data['neuron']
 
     # Start actual visualization
     all_highlighted_wrong_answers = []
@@ -274,7 +204,7 @@ def display_neuron(neuron):
     indexed_wrong_answers = {}
     indexed_highlighted_wrong_answers = {}
 
-    for i in session['indices']:
+    for i in indices:
         print('Generating activations for QA pair', i)
         row = qa_pairs.iloc[i]
         correct_answers = answer_texts.loc[row['answer_ids']]['answer'].values
@@ -293,7 +223,7 @@ def display_neuron(neuron):
             if np.max(all_values_ca) > max_ca:
                 max_ca = np.max(all_values_ca)
             highlighted_correct_answers = highlight_neuron(rnn_values_ca, correct_answers, ca_tokens,
-                                                           session['scale'],
+                                                           False,  # Scale placeholder
                                                            neuron)
 
             if i not in indexed_highlighted_correct_answers:
@@ -334,7 +264,8 @@ def display_neuron(neuron):
                 min_wa = np.min(all_values_wa)
             if np.max(all_values_wa) > max_wa:
                 max_wa = np.max(all_values_wa)
-            highlighted_wrong_answers = highlight_neuron(rnn_values_wa, wrong_answers, wa_tokens, session['scale'],
+            highlighted_wrong_answers = highlight_neuron(rnn_values_wa, wrong_answers, wa_tokens, False,
+                                                         # Scale placeholder
                                                          neuron)
             all_highlighted_wrong_answers.append(highlighted_wrong_answers)
 
@@ -396,22 +327,19 @@ def display_neuron(neuron):
                 else:
                     pl_wa_heatmaps_indexed[i] = [heatmap_points]
 
-    all_firings = [x for i in session['indices'] for x in activation_per_word_data['wa_firings' + str(i)]] + [x for
-                                                                                                              i in
-                                                                                                              session[
-                                                                                                                  'indices']
-                                                                                                              for x
-                                                                                                              in
-                                                                                                              activation_per_word_data[
-                                                                                                                  'ca_firings' + str(
-                                                                                                                      i)]]
-    all_tokens = [x for i in session['indices'] for x in activation_per_word_data['wa_text' + str(i)]] + [x for i in
-                                                                                                          session[
-                                                                                                              'indices']
-                                                                                                          for x in
-                                                                                                          activation_per_word_data[
-                                                                                                              'ca_text' + str(
-                                                                                                                  i)]]
+    all_firings = [x for i in indices for x in activation_per_word_data['wa_firings' + str(i)]] + [x for
+                                                                                                   i in indices
+                                                                                                   for x
+                                                                                                   in
+                                                                                                   activation_per_word_data[
+                                                                                                       'ca_firings' + str(
+                                                                                                           i)]]
+    all_tokens = [x for i in indices for x in activation_per_word_data['wa_text' + str(i)]] + [x for i in
+                                                                                               indices
+                                                                                               for x in
+                                                                                               activation_per_word_data[
+                                                                                                   'ca_text' + str(
+                                                                                                       i)]]
     all_firings = np.array(all_firings)
     all_tokens = np.array(all_tokens)
     p_high = np.percentile([x for i, x in enumerate(all_firings) if all_tokens[i] != '<pad>'], 90)
@@ -431,11 +359,7 @@ def display_neuron(neuron):
     antiactivated_words = [x for x in antiactivated_words if not (x in seen or seen.add(x))]
     asked_questions = qa_pairs['question']
 
-    return jsonify({'neuron': neuron,
-                    'neuron_num': neuron_num,
-                    'random': session['random'],
-                    'indices': session['indices'],
-                    'scale': session['scale'],
+    return jsonify({'max_qa_pairs': len(qa_pairs),
                     'activated_words': activated_words,
                     'antiactivated_words': antiactivated_words,
                     'asked_questions': asked_questions.to_json(),
