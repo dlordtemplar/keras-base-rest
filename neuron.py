@@ -480,18 +480,22 @@ def tsne_plot(model, labels, correct_answers, wrong_answers, question, perplexit
     return plotly_tsne_as_json
 
 
-@bp.route('/pair', defaults={'pair_num': 0}, strict_slashes=False, methods=['GET', 'POST'])
-@bp.route('/pair/<int:pair_num>', strict_slashes=False, methods=['GET', 'POST'])
-def pair(pair_num):
+@bp.route('/pair', strict_slashes=False, methods=['GET', 'POST'])
+def pair():
     global answer_texts, qa_pairs, vocabulary_inv, model
-    perplexity = int(request.args.get('perplexity'))
-    neuron_display_ca = request.args.get('neuron_display_ca')
-    if neuron_display_ca != 'None':
+
+    data = json.loads(request.data)
+    print(data)
+
+    pair_num = data['pair_num']
+    perplexity = data['perplexity']
+    scale = data['scale']
+    neuron_display_ca = data['ca_neuron']
+    if neuron_display_ca > -1:
         neuron_display_ca = int(neuron_display_ca)
-    neuron_display_wa = request.args.get('neuron_display_wa')
-    if neuron_display_wa != 'None':
+    neuron_display_wa = data['wa_neuron']
+    if neuron_display_wa > -1:
         neuron_display_wa = int(neuron_display_wa)
-    scale = request.args.get('scale')
 
     if pair_num >= len(qa_pairs):
         return 'Index out of bounds.'
@@ -558,10 +562,10 @@ def pair(pair_num):
     highlighted_correct_answers = correct_answers.tolist()
     highlighted_wrong_answers = wrong_answers.tolist()
 
-    if neuron_display_ca != 'None':
+    if neuron_display_ca > -1:
         highlighted_correct_answers = highlight_neuron(rnn_values_ca, correct_answers, ca_tokens, scale,
                                                        neuron_display_ca)
-    if neuron_display_wa != 'None':
+    if neuron_display_wa > -1:
         highlighted_wrong_answers = highlight_neuron(rnn_values_wa, wrong_answers, wa_tokens, scale, neuron_display_wa)
 
     return jsonify({'question': question,
