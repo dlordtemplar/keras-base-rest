@@ -3,16 +3,18 @@ import string
 import time
 import xml.etree.ElementTree as ET
 
-import enchant
+# import enchant
 import numpy as np
 import pandas as pd
 import spacy
+import hunspell
 # Try this if you get a problem with "spacy.load('en')":
 # pip install spacy && python -m spacy download en
 from nltk.corpus import stopwords
 from nltk.stem.snowball import EnglishStemmer
 
-d = enchant.Dict("en_US")
+hobj = hunspell.HunSpell('/usr/share/hunspell/en_US.dic', '/usr/share/hunspell/en_US.aff')
+# d = enchant.Dict("en_US")
 stemmer = EnglishStemmer()
 nlp = spacy.load('en')
 eng_stopwords = set(stopwords.words("english"))
@@ -111,12 +113,13 @@ class Text():
             self.tokenize()
         self.spellchecked_text = []
         for token in self.tokens:
-            if len(token) > 2 and not d.check(token) and len(d.suggest(token)) > 0:
-                self.spellchecked_text.append(d.suggest(token)[0])
+            # if len(token) > 2 and not d.check(token) and len(d.suggest(token)) > 0:
+            if len(token) > 2 and not hobj.spell(token) and len(hobj.suggest(token)) > 0:
+                self.spellchecked_text.append(hobj.suggest(token)[0])
             else:
                 self.spellchecked_text.append(token)
         self.spellchecked_text = ' '.join(self.spellchecked_text)
-        spellchecked_tokens = [str(token.text) for token in nlp(self.spellchecked_text)]
+        # spellchecked_tokens = [str(token.text) for token in nlp(self.spellchecked_text)]
         return self.spellchecked_text
 
     def replace_ne(self):
@@ -307,9 +310,8 @@ def xml2dataframe_NoLabels(dataset, split_type=''):
     dataset_dataframe = pd.DataFrame.from_dict(tmp, orient='index').rename(
         columns={0: 'question', 1: 'candidates', 2: 'split_type'})
     for ind, row in dataset_dataframe.iterrows():
-        # TODO: Fix deprecation
-        dataset_dataframe.set_value(ind, 'qid', int(ind.split('_')[0][1:]))
-        dataset_dataframe.set_value(ind, 'rid', int(ind.split('_')[1][1:]))
+        dataset_dataframe.at[ind['qid']] = int(ind.split('_')[0][1:])
+        dataset_dataframe.at[ind['rid']] = int(ind.split('_')[1][1:])
     dataset_dataframe = dataset_dataframe.sort_values(['qid', 'rid'])
     answer_texts_dataset = {}
     for obj in dataset:

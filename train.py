@@ -23,7 +23,6 @@ from sklearn.model_selection import train_test_split
 
 EMBEDDING_FOLDER = "resources/embeddings/"
 EMBEDDING_DIM = 300
-GLOVE_PATH = EMBEDDING_FOLDER + "glove.6B." + str(EMBEDDING_DIM) + "d.txt"
 WORD2VEC_PATH = EMBEDDING_FOLDER + "GoogleNews-vectors-negative300.bin"
 DATA_PATH = 'out/data/semeval/'
 MODEL_PATH = 'out/data/semeval/models/'
