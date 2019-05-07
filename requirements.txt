@@ -1,3 +1,4 @@
+flask
 hunspell
 numpy
 editdistance>=0.5.2
