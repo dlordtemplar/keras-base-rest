@@ -7,13 +7,13 @@ import xml.etree.ElementTree as ET
 import numpy as np
 import pandas as pd
 import spacy
-import hunspell
+# import hunspell
 # Try this if you get a problem with "spacy.load('en')":
 # pip install spacy && python -m spacy download en
 from nltk.corpus import stopwords
 from nltk.stem.snowball import EnglishStemmer
 
-hobj = hunspell.HunSpell('/usr/share/hunspell/en_US.dic', '/usr/share/hunspell/en_US.aff')
+# hobj = hunspell.HunSpell('/usr/share/hunspell/en_US.dic', '/usr/share/hunspell/en_US.aff')
 # d = enchant.Dict("en_US")
 stemmer = EnglishStemmer()
 nlp = spacy.load('en')
@@ -108,19 +108,20 @@ class Text():
                                for token in self.doc]
         return self.named_entities
 
-    def spell_check(self):
-        if len(self.tokens) == 0:
-            self.tokenize()
-        self.spellchecked_text = []
-        for token in self.tokens:
-            # if len(token) > 2 and not d.check(token) and len(d.suggest(token)) > 0:
-            if len(token) > 2 and not hobj.spell(token) and len(hobj.suggest(token)) > 0:
-                self.spellchecked_text.append(hobj.suggest(token)[0])
-            else:
-                self.spellchecked_text.append(token)
-        self.spellchecked_text = ' '.join(self.spellchecked_text)
-        # spellchecked_tokens = [str(token.text) for token in nlp(self.spellchecked_text)]
-        return self.spellchecked_text
+    # PROD: Commented this out as I am not allowed to install libhunspell-dev in the prod environment
+    # def spell_check(self):
+    #     if len(self.tokens) == 0:
+    #         self.tokenize()
+    #     self.spellchecked_text = []
+    #     for token in self.tokens:
+    #         # if len(token) > 2 and not d.check(token) and len(d.suggest(token)) > 0:
+    #         if len(token) > 2 and not hobj.spell(token) and len(hobj.suggest(token)) > 0:
+    #             self.spellchecked_text.append(hobj.suggest(token)[0])
+    #         else:
+    #             self.spellchecked_text.append(token)
+    #     self.spellchecked_text = ' '.join(self.spellchecked_text)
+    #     # spellchecked_tokens = [str(token.text) for token in nlp(self.spellchecked_text)]
+    #     return self.spellchecked_text
 
     def replace_ne(self):
         if len(self.named_entities) == 0:

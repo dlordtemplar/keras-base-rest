@@ -1,8 +1,6 @@
 import json
 import pickle
 
-import numpy as np
-import pandas as pd
 import tensorflow as tf
 from flask import (
     Blueprint, request, jsonify
