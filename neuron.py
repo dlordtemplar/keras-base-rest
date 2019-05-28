@@ -411,18 +411,18 @@ def tsne_plot(model, labels, correct_answers, wrong_answers, question, perplexit
             trace_question_x.append(new_values[label_index][0])
             trace_question_y.append(new_values[label_index][1])
             trace_question_text.append('Q')
-            trace_question_hovertext.append(question)
+            trace_question_hovertext.append(question if len(question) < 61 else question[:60] + '...')
         elif labels[label_index] == 'ca':
             trace_ca_x.append(new_values[label_index][0])
             trace_ca_y.append(new_values[label_index][1])
             trace_ca_text.append('CA' + str(len(trace_ca_x)))
-            trace_ca_hovertext.append(correct_answers[ca_index])
+            trace_ca_hovertext.append(correct_answers[ca_index] if len(correct_answers[ca_index]) < 61 else correct_answers[ca_index][:60] + '...')
             ca_index += 1
         elif labels[label_index] == 'wa':
             trace_wa_x.append(new_values[label_index][0])
             trace_wa_y.append(new_values[label_index][1])
             trace_wa_text.append('WA' + str(len(trace_wa_x)))
-            trace_wa_hovertext.append(wrong_answers[wa_index])
+            trace_wa_hovertext.append(wrong_answers[wa_index] if len(wrong_answers[wa_index]) < 61 else wrong_answers[wa_index][:60] + '...')
             wa_index += 1
 
     marker_blue = {
