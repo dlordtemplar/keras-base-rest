@@ -3,3 +3,4 @@ venv/
 out/
 *.pyc
 resources/embeddings/
+keras-base-rest/
