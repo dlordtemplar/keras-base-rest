@@ -574,6 +574,12 @@ def pair():
     if neuron_display_wa > -1:
         highlighted_wrong_answers = highlight_neuron(rnn_values_wa, wrong_answers, wa_tokens, scale, neuron_display_wa)
 
+    # Convert ndarrays to lists
+    if len(scores_ca) > 0:
+        scores_ca = scores_ca.tolist()
+    if len(scores_wa) > 0:
+        scores_wa = scores_wa.tolist()
+
     return jsonify({'question': question,
                     'highlighted_wrong_answers': highlighted_wrong_answers,
                     'highlighted_correct_answers': highlighted_correct_answers,
@@ -585,8 +591,8 @@ def pair():
                     'neuron_display_wa': neuron_display_wa,
                     'scale': scale,
                     'texts_len': len(qa_pairs),
-                    'scores_ca': scores_ca.tolist(),
-                    'scores_wa': scores_wa.tolist(),
+                    'scores_ca': scores_ca,
+                    'scores_wa': scores_wa,
                     # plotly
                     'plotly_tsne': plotly_tsne,
                     'pl_ca_heatmaps': pl_ca_heatmaps,
