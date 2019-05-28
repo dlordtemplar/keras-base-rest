@@ -1,6 +1,9 @@
 import json
 import pickle
 
+import notebook_util
+notebook_util.setup_one_gpu()
+
 import tensorflow as tf
 from flask import (
     Blueprint, request, jsonify
@@ -195,6 +198,7 @@ def display_neuron():
     antiactivated_words_values = []
 
     activation_per_word_data = {}
+    asked_questions = {}
 
     # plotly
     pl_ca_heatmaps_indexed = {}
@@ -210,6 +214,7 @@ def display_neuron():
         correct_answers = answer_texts.loc[row['answer_ids']]['answer'].values
         wrong_answers = answer_texts.loc[row['pool']]['answer'].values
         question = row['question']
+        asked_questions[i] = question
         q_tokens, q_padded_tokens = prepare_data([question])
         ca_tokens, ca_padded_tokens = prepare_data(correct_answers)
         wa_tokens, wa_padded_tokens = prepare_data(wrong_answers)
@@ -357,12 +362,11 @@ def display_neuron():
     activated_words = [x for x in activated_words if not (x in seen or seen.add(x))]
     seen = set()
     antiactivated_words = [x for x in antiactivated_words if not (x in seen or seen.add(x))]
-    asked_questions = qa_pairs['question']
 
     return jsonify({'max_qa_pairs': len(qa_pairs),
                     'activated_words': activated_words,
                     'antiactivated_words': antiactivated_words,
-                    'asked_questions': asked_questions.to_json(),
+                    'asked_questions': json.dumps(asked_questions),
                     # plotly
                     'pl_ca_heatmap_points': pl_ca_heatmaps_indexed,
                     'pl_wa_heatmap_points': pl_wa_heatmaps_indexed,
@@ -405,18 +409,18 @@ def tsne_plot(model, labels, correct_answers, wrong_answers, question, perplexit
             trace_question_x.append(new_values[label_index][0])
             trace_question_y.append(new_values[label_index][1])
             trace_question_text.append('Q')
-            trace_question_hovertext.append(question)
+            trace_question_hovertext.append(question if len(question) < 61 else question[:60] + '...')
         elif labels[label_index] == 'ca':
             trace_ca_x.append(new_values[label_index][0])
             trace_ca_y.append(new_values[label_index][1])
             trace_ca_text.append('CA' + str(len(trace_ca_x)))
-            trace_ca_hovertext.append(correct_answers[ca_index])
+            trace_ca_hovertext.append(correct_answers[ca_index] if len(correct_answers[ca_index]) < 61 else correct_answers[ca_index][:60] + '...')
             ca_index += 1
         elif labels[label_index] == 'wa':
             trace_wa_x.append(new_values[label_index][0])
             trace_wa_y.append(new_values[label_index][1])
             trace_wa_text.append('WA' + str(len(trace_wa_x)))
-            trace_wa_hovertext.append(wrong_answers[wa_index])
+            trace_wa_hovertext.append(wrong_answers[wa_index] if len(wrong_answers[wa_index]) < 61 else wrong_answers[wa_index][:60] + '...')
             wa_index += 1
 
     marker_blue = {
@@ -568,6 +572,12 @@ def pair():
     if neuron_display_wa > -1:
         highlighted_wrong_answers = highlight_neuron(rnn_values_wa, wrong_answers, wa_tokens, scale, neuron_display_wa)
 
+    # Convert ndarrays to lists
+    if len(scores_ca) > 0:
+        scores_ca = scores_ca.tolist()
+    if len(scores_wa) > 0:
+        scores_wa = scores_wa.tolist()
+
     return jsonify({'question': question,
                     'highlighted_wrong_answers': highlighted_wrong_answers,
                     'highlighted_correct_answers': highlighted_correct_answers,
@@ -579,8 +589,8 @@ def pair():
                     'neuron_display_wa': neuron_display_wa,
                     'scale': scale,
                     'texts_len': len(qa_pairs),
-                    'scores_ca': scores_ca.tolist(),
-                    'scores_wa': scores_wa.tolist(),
+                    'scores_ca': scores_ca,
+                    'scores_wa': scores_wa,
                     # plotly
                     'plotly_tsne': plotly_tsne,
                     'pl_ca_heatmaps': pl_ca_heatmaps,

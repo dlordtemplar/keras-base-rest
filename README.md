@@ -1,5 +1,6 @@
 ### Requirements
 
+- flask
 - hunspell (Requires python-dev and libhunspell-dev. Install with 'sudo apt-get install libhunspell-dev')
 - numpy
 - editdistance
