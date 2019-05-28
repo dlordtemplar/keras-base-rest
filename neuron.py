@@ -1,6 +1,9 @@
 import json
 import pickle
 
+import notebook_util
+notebook_util.setup_one_gpu()
+
 import numpy as np
 import pandas as pd
 import tensorflow as tf
@@ -197,6 +200,7 @@ def display_neuron():
     antiactivated_words_values = []
 
     activation_per_word_data = {}
+    asked_questions = {}
 
     # plotly
     pl_ca_heatmaps_indexed = {}
@@ -212,6 +216,7 @@ def display_neuron():
         correct_answers = answer_texts.loc[row['answer_ids']]['answer'].values
         wrong_answers = answer_texts.loc[row['pool']]['answer'].values
         question = row['question']
+        asked_questions[i] = question
         q_tokens, q_padded_tokens = prepare_data([question])
         ca_tokens, ca_padded_tokens = prepare_data(correct_answers)
         wa_tokens, wa_padded_tokens = prepare_data(wrong_answers)
@@ -359,12 +364,11 @@ def display_neuron():
     activated_words = [x for x in activated_words if not (x in seen or seen.add(x))]
     seen = set()
     antiactivated_words = [x for x in antiactivated_words if not (x in seen or seen.add(x))]
-    asked_questions = qa_pairs['question']
 
     return jsonify({'max_qa_pairs': len(qa_pairs),
                     'activated_words': activated_words,
                     'antiactivated_words': antiactivated_words,
-                    'asked_questions': asked_questions.to_json(),
+                    'asked_questions': json.dumps(asked_questions),
                     # plotly
                     'pl_ca_heatmap_points': pl_ca_heatmaps_indexed,
                     'pl_wa_heatmap_points': pl_wa_heatmaps_indexed,
