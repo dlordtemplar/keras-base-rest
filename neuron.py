@@ -2,6 +2,7 @@ import json
 import pickle
 
 import notebook_util
+
 notebook_util.setup_one_gpu()
 
 import tensorflow as tf
@@ -414,13 +415,16 @@ def tsne_plot(model, labels, correct_answers, wrong_answers, question, perplexit
             trace_ca_x.append(new_values[label_index][0])
             trace_ca_y.append(new_values[label_index][1])
             trace_ca_text.append('CA' + str(len(trace_ca_x)))
-            trace_ca_hovertext.append(correct_answers[ca_index] if len(correct_answers[ca_index]) < 61 else correct_answers[ca_index][:60] + '...')
+            trace_ca_hovertext.append(
+                correct_answers[ca_index] if len(correct_answers[ca_index]) < 61 else correct_answers[ca_index][
+                                                                                      :60] + '...')
             ca_index += 1
         elif labels[label_index] == 'wa':
             trace_wa_x.append(new_values[label_index][0])
             trace_wa_y.append(new_values[label_index][1])
             trace_wa_text.append('WA' + str(len(trace_wa_x)))
-            trace_wa_hovertext.append(wrong_answers[wa_index] if len(wrong_answers[wa_index]) < 61 else wrong_answers[wa_index][:60] + '...')
+            trace_wa_hovertext.append(
+                wrong_answers[wa_index] if len(wrong_answers[wa_index]) < 61 else wrong_answers[wa_index][:60] + '...')
             wa_index += 1
 
     marker_blue = {
@@ -596,3 +600,11 @@ def pair():
                     'pl_ca_heatmaps': pl_ca_heatmaps,
                     'pl_wa_heatmaps': pl_wa_heatmaps
                     })
+
+
+@bp.route('/questions', strict_slashes=False, methods=['GET', 'POST'])
+def questions():
+    with open('out/data/plotly_all_questions_json_string_p20.json', 'r') as file:
+        plotly_all_questions = json.load(file)
+
+    return plotly_all_questions
