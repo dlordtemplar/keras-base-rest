@@ -608,3 +608,11 @@ def questions():
         plotly_all_questions = json.load(file)
 
     return plotly_all_questions
+
+
+@bp.route('/pos', strict_slashes=False, methods=['GET', 'POST'])
+def pos():
+    with open('out/data/semeval/pos_per_neuron.json', 'r') as file:
+        plotly_pos = json.load(file)
+
+    return plotly_pos
