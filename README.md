@@ -68,7 +68,7 @@ NOTE: If you do not have sudo access, you cannot install the spellchecking libra
 10. Run [train.py](train.py) to create the model used to generate data for visualizations.
 11. Set the following environment variables below and execute the following command to run the server:
     ~~~
-    FLASK_APP=flaskr
+    FLASK_APP=app
     FLASK_ENV=development
     ~~~
     ~~~
