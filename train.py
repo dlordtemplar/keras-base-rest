@@ -1,6 +1,11 @@
 # SiameseLSTM_visualization_semeval.ipynb
 import os
 
+import notebook_util
+
+print(notebook_util.list_available_gpus())
+notebook_util.setup_one_gpu()
+
 import tensorflow as tf
 from keras.engine import Model
 

@@ -310,8 +310,8 @@ def xml2dataframe_NoLabels(dataset, split_type=''):
     dataset_dataframe = pd.DataFrame.from_dict(tmp, orient='index').rename(
         columns={0: 'question', 1: 'candidates', 2: 'split_type'})
     for ind, row in dataset_dataframe.iterrows():
-        dataset_dataframe.at[ind['qid']] = int(ind.split('_')[0][1:])
-        dataset_dataframe.at[ind['rid']] = int(ind.split('_')[1][1:])
+        dataset_dataframe.at[ind, 'qid'] = int(ind.split('_')[0][1:])
+        dataset_dataframe.at[ind, 'rid'] = int(ind.split('_')[1][1:])
     dataset_dataframe = dataset_dataframe.sort_values(['qid', 'rid'])
     answer_texts_dataset = {}
     for obj in dataset:
