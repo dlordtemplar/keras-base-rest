@@ -99,8 +99,8 @@ transformations = [('heavy_clean', Text.heavy_clean), ('clean', Text.clean), ('t
                    ('pos_tag', Text.pos_tag), ('ner', Text.ner), ('replace_ne', Text.replace_ne)]
 
 for idx, row in train.iterrows():
-    train.at[idx['question']] = Text(row['question'], 'question', idx)
-    train.at[idx['answer']] = Text(row['answer'], 'answer', idx)
+    train.at[idx, 'question'] = Text(row['question'], 'question', idx)
+    train.at[idx, 'answer'] = Text(row['answer'], 'answer', idx)
 for transformation in transformations:
     train = transform_dataset(train, transformation)
 
@@ -108,7 +108,7 @@ print('dataset: dev_')
 # for dataset in [test, dev, test_, dev_]:
 for dataset in [dev_]:
     for idx, row in dataset.iterrows():
-        dataset.at[idx['question']] = Text(row['question'], 'question', idx)
+        dataset.at[idx, 'question'] = Text(row['question'], 'question', idx)
     for transformation in transformations:
         dataset = transform_dataset(dataset, transformation)
 
@@ -116,7 +116,7 @@ print('dataset: answer_texts_train, answer_texts_dev')
 # for dataset in [answer_texts_train, answer_texts_dev, answer_texts_test]:
 for dataset in [answer_texts_train, answer_texts_dev]:
     for idx, row in dataset.iterrows():
-        dataset.at[idx['answer']] = Text(row['answer'], 'answer', idx)
+        dataset.at[idx, 'answer'] = Text(row['answer'], 'answer', idx)
     for transformation in transformations:
         dataset = transform_dataset(dataset, transformation)
 
