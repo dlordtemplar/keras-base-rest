@@ -1,6 +1,6 @@
 # %%
+import time
 import tensorflow as tf
-import keras
 from keras import backend as K
 from keras.preprocessing.sequence import pad_sequences
 from keras.models import model_from_json
@@ -8,13 +8,18 @@ from loading_preprocessing_TC import *
 import pickle
 import json
 import os
-import nltk
+import requests
+import re
+
+start_time = time.time()
 
 MODEL_DIR = 'out/data/semeval/models'
 DATASET_PATH = 'resources/datasets/semeval/train/'
 DATA_PATH = 'out/data/semeval/'
 MODEL_PATH = 'out/data/semeval/models/'
 NEURON_COUNT_PATH = 'out/data/semeval/neuron_count.json'
+POS_PER_NEURON_PATH = 'out/data/semeval/pos_per_neuron.json'
+POS_DICT_PATH = 'out/data/semeval/pos_dict.json'
 
 MAX_LENGTH = 200
 model = None
@@ -122,66 +127,44 @@ def visualize_model_deep(model, question_lstm=True):
     return all_function, output_function
 
 
-def highlight_neuron(rnn_values, texts, tokens, scale, neuron):
-    """Generate HTML code where each word is highlighted according to a given neuron activity on it."""
-    tag_string = "<span data-toggle=\"tooltip\" title=\"SCORE\"><span style = \"background-color: rgba(COLOR, OPACITY);\">WORD</span></span>"
-    old_texts = texts
-    texts = []
-    for idx in range(0, len(old_texts)):
+def get_neuron_attention_per_token(rnn_values, texts, tokens, neuron):
+    result = []
+    all_tokens = []
+    for idx in range(0, len(texts)):
         current_neuron_values = rnn_values[idx, :, neuron]
         current_neuron_values = current_neuron_values[-len(tokens[idx]):]
         words = [vocabulary_inv[x] for x in tokens[idx]]
+        for word_index in range(len(words) - 1, -1, -1):
+            # if re.match(r'[\\xa0]+', words[word_index]):
+            if words[word_index].replace(u'\xa0', ' ').strip() == '':
+                del words[word_index]
         current_strings = []
-        if scale:
-            scaled = [
-                ((x - min(current_neuron_values)) * (2) / (
-                        max(current_neuron_values) - min(current_neuron_values))) + (
-                    -1)
-                for x in current_neuron_values]
-        else:
-            scaled = current_neuron_values
-        for score, word, scaled_score in zip(current_neuron_values, words, scaled):
-            if score > 0:
-                color = '195, 85, 58'
-            else:
-                color = '63, 127, 147'
-            current_string = tag_string.replace('SCORE', str(score)).replace('WORD', word).replace('OPACITY', str(
-                abs(scaled_score))).replace('COLOR', color)
+        for score, word in zip(current_neuron_values, words):
+            current_string = (word, score)
             current_strings.append(current_string)
-        texts.append(' '.join(current_strings))
-    return texts
+        result.append(current_strings)
+        all_tokens.append(words)
+    return result, all_tokens
+
+
+def convert_from_ud_to_array(raw_ud_input):
+    result = []
+    for line in raw_ud_input.split('\n'):
+        if not line.startswith('#') and line.strip() != '':
+            result.append(line.split())
+    return result
+
+
+def align_tokens_and_ud(token_score_tuples, ud_output):
+    result = []
+    temp = convert_from_ud_to_array(ud_output)
+    for index in range(len(temp)):
+        result.append((token_score_tuples[index][0], token_score_tuples[index][1], temp[index][3], temp[index][4]))
+    return result
 
 
 model = load_environment()
 print("Finished loading.")
-# %%
-# Generate pos_tagged_questions
-
-
-# nltk.download('averaged_perceptron_tagger')
-POS_TAGGED_QUESTIONS_PATH = 'out/data/semeval/pos_tagged_questions.json'
-
-print(len(qa_pairs))
-if not os.path.isfile(POS_TAGGED_QUESTIONS_PATH):
-    print('File not found! Creating new version...')
-    tagged_dict = {}
-    for i in range(len(qa_pairs)):
-        row = qa_pairs.iloc[i]
-        question = row['question']
-
-        tokens = nltk.word_tokenize(question)
-        tagged = nltk.pos_tag(tokens)
-        tagged_dict[i] = tagged
-    print('Writing to file...')
-    with open(POS_TAGGED_QUESTIONS_PATH, 'w') as file:
-        json.dump(tagged_dict, file)
-        print('Finished!')
-else:
-    print('Loading existing file.')
-    with open(POS_TAGGED_QUESTIONS_PATH, 'r') as file:
-        tagged_dict = json.load(file)
-
-# %%
 
 indices = [0, 1]
 neuron = 0
@@ -191,6 +174,7 @@ all_highlighted_wrong_answers = []
 all_wrong_answers = []
 
 min_ca = 1
+
 min_wa = 1
 max_ca = -1
 max_wa = -1
@@ -206,13 +190,15 @@ asked_questions = {}
 all_function_deep, output_function_deep = visualize_model_deep(model, False)
 nlp = spacy.load('en')
 
+# %%
+
+
 """
 neuron_counts
 
 [
     {
         num: 0,
-        # tokens = [('Yes', 'UH'), ('Try', 'VB'), ...]
         token_counts: {
             UH: 1,
             VB: 1,
@@ -223,126 +209,171 @@ neuron_counts
 ]
 """
 neuron_counts = []
-for neuron_num in range(NEURON_MAX):
-    print('neuron', neuron_num)
-    neuron_count = {
-        'neuron': neuron_num,
-        # 'tokens': [],
-        'token_counts': {}
+
+if os.path.exists(NEURON_COUNT_PATH):
+    print('Loading existing file...')
+    with open(NEURON_COUNT_PATH, 'r') as file:
+        neuron_counts = json.load(file)
+    print('Done.')
+else:
+    print('Generating new file...')
+    udpipe_URL = 'http://lindat.mff.cuni.cz/services/udpipe/api/process'
+    munderline_URL = 'http://iread.dfki.de/munderline/de_ud'
+    headers = {
+        'Content-Type': 'application/x-www-form-urlencoded; charset=utf-8'
     }
-    for i in range(1790):  # indices:
-        print('Generating activations for QA pair', i)
-        row = qa_pairs.iloc[i]
-        correct_answers = answer_texts.loc[row['answer_ids']]['answer'].values
-        # correct_answers_pos = []
-        # for sent in correct_answers:
-        #     # tokens = nltk.word_tokenize(sent)
-        #     tokens = nlp(sent)
-        #     nlp_tokens = [str(token.text) for token in tokens]
-        #     correct_answers_pos.append(nltk.pos_tag(nlp_tokens))
-        wrong_answers = answer_texts.loc[row['pool']]['answer'].values
-        question = row['question']
-        asked_questions[i] = question
-        q_tokens, q_padded_tokens = prepare_data([question])
-        ca_tokens, ca_padded_tokens = prepare_data(correct_answers)
-        wa_tokens, wa_padded_tokens = prepare_data(wrong_answers)
-        if len(correct_answers) > 0:
-            scores_ca, rnn_values_ca = all_function_deep([q_padded_tokens * len(correct_answers), ca_padded_tokens])
-            # neuron_num = rnn_values_ca.shape[-1]
-            all_values_ca = rnn_values_ca[:, :, neuron_num:neuron_num + 1]
-            # if np.min(all_values_ca) < min_ca:
-            #     min_ca = np.min(all_values_ca)
-            # if np.max(all_values_ca) > max_ca:
-            #     max_ca = np.max(all_values_ca)
 
-            for idx in range(0, len(correct_answers)):
-                current_neuron_values = rnn_values_ca[idx, :, neuron_num]
-                current_neuron_values = current_neuron_values[-len(ca_tokens[idx]):]
-                # print(correct_answers[idx]) # Yes. It is right behind Kahrama in the National area.
-                # print(ca_tokens[idx]) # [163, 11, 7, 139, 651, 12356, 6, 1, 1083, 363]
-                # print(current_neuron_values) # [5.8287954e-01 2.0389782e-02 3.1098869e-04 3.2598805e-04 1.8663764e-04 1.3387189e-03 1.0951190e-04 6.6894456e-04 5.4823589e-03 5.3216936e-03]
+    # Every neuron will react to the same tokens/POS tags, so only call to server once per input instead of 1790x
+    if os.path.exists(POS_DICT_PATH):
+        print('Loading existing file...')
+        with open(POS_DICT_PATH, 'r') as file:
+            pos_dict = json.load(file)
+        print('Done.')
+    else:
+        pos_dict = {}
 
-                tokens = keras.preprocessing.text.text_to_word_sequence(correct_answers[idx], lower=True)
-                tagged = nltk.pos_tag(tokens)
+    for neuron_num in range(NEURON_MAX):
+        print('neuron', neuron_num)
+        neuron_count = {
+            'neuron': neuron_num,
+            'token_counts': {}
+        }
+        for i in range(1510, 1760):  # indices:
+            print('Generating activations for QA pair', i)
+            if i not in pos_dict:
+                pos_dict[i] = {
+                    'ca': {},
+                    'wa': {}
+                }
 
-                if len(tagged) > 0:
+            row = qa_pairs.iloc[i]
+            correct_answers = answer_texts.loc[row['answer_ids']]['answer'].values
+            wrong_answers = answer_texts.loc[row['pool']]['answer'].values
+            question = row['question']
+            asked_questions[i] = question
+            q_tokens, q_padded_tokens = prepare_data([question])
+            ca_tokens, ca_padded_tokens = prepare_data(correct_answers)
+            wa_tokens, wa_padded_tokens = prepare_data(wrong_answers)
+            if len(correct_answers) > 0:
+                scores_ca, rnn_values_ca = all_function_deep([q_padded_tokens * len(correct_answers), ca_padded_tokens])
 
-                    val_max = max(current_neuron_values)
-                    val_min = min(current_neuron_values)
-                    index_min = np.argmin(current_neuron_values)
-                    index_max = np.argmax(current_neuron_values)
-                    # print('max', val_max)
-                    # print('min', val_min)
-                    index_chosen = -1
-                    if abs(val_min) > val_max:
-                        index_chosen = index_min
+                tuples, all_tokens = get_neuron_attention_per_token(rnn_values_ca, correct_answers, ca_tokens, neuron)
+                for idx in range(len(all_tokens)):
+                    if i in pos_dict and idx in pos_dict[i]['ca']:
+                        parser_output = pos_dict[i]['ca'][idx]
                     else:
-                        index_chosen = index_max
-                    # print(index_chosen)
-                    # print(keras.preprocessing.text.text_to_word_sequence(correct_answers[idx], lower=True))
+                        # data = {
+                        #     'data': ' '.join(all_tokens[idx]),
+                        #     'model': 'english-gum-ud-2.4-190531',
+                        #     'tokenizer': '',
+                        #     'tagger': '--tag',
+                        #     'parser': ''
+                        # }
+                        data = {
+                            'input': ' '.join(all_tokens[idx]),
+                        }
+                        # response = requests.post(udpipe_URL, headers=headers, data=data)
+                        response = requests.post(munderline_URL, headers=headers, data=data)
+                        response.encoding = 'utf-8'
+                        # parser_output = response.json()['result']
+                        parser_output = response.text
+                        pos_dict[i]['ca'][idx] = parser_output
+                    current_pos_scores = align_tokens_and_ud(tuples[idx], parser_output)
+                    # [('most', 0.73064023, 'ADJ', 'JJS'), ('of', 0.031687938, 'ADP', 'IN'), ('the', 0.008439351, 'DET', 'DT'), ('time', 7.566358e-05, 'NOUN', 'NN'), ('hijacking', 0.00023871037, 'VERB', 'VBG'), ('shifts', 0.00029278902, 'VERB', 'VBZ'), ('the', 0.00026579967, 'DET', 'DT'), ('main', 0.026925175, 'ADJ', 'JJ'), ('topic', 0.0046378975, 'NOUN', 'NN'), ('to', 0.0003025322, 'ADP', 'TO'), ('a', 0.00088415114, 'DET', 'DT'), ('different', 0.0012040904, 'ADJ', 'JJ'), ('one', 0.009830474, 'NUM', 'CD'), ('and', 0.00029199503, 'CCONJ', 'CC'), ('then', 0.0035359005, 'ADV', 'RB'), ('to', 0.00042696742, 'ADP', 'TO'), ('another', 0.00050246046, 'DET', 'DT'), ('different', 0.0010206797, 'ADJ', 'JJ'), ('one', 0.0062409323, 'NUM', 'CD'), ('and', 0.00012129463, 'CCONJ', 'CC'), ('so', 0.00026837253, 'ADV', 'RB'), ('on', 0.00025421553, 'ADP', 'IN')]
+                    for current_tuple in current_pos_scores:
+                        # current_tuple[2] = UPOS, current_tuple[2] = XPOS,
+                        if current_tuple[2] in neuron_count['token_counts']:
+                            neuron_count['token_counts'][current_tuple[2]] = neuron_count['token_counts'][
+                                                                                 current_tuple[2]] + abs(current_tuple[1])
+                        else:
+                            neuron_count['token_counts'][current_tuple[2]] = abs(current_tuple[1])
+            else:
+                pass
 
-                    # print(tagged)
-                    token_to_add = tagged[index_chosen]
-                    # print(token_to_add)
-                    # neuron_count['tokens'].append(token_to_add)
-                    if token_to_add[1] in neuron_count['token_counts']:
-                        neuron_count['token_counts'][token_to_add[1]] = neuron_count['token_counts'][token_to_add[1]] + 1
+            if len(wrong_answers) > 0:
+                scores_wa, rnn_values_wa = all_function_deep([q_padded_tokens * len(wrong_answers), wa_padded_tokens])
+
+                tuples, all_tokens = get_neuron_attention_per_token(rnn_values_wa, wrong_answers, wa_tokens, neuron)
+                for idx in range(len(all_tokens)):
+                    if i in pos_dict and idx in pos_dict[i]['wa']:
+                        parser_output = pos_dict[i]['wa'][idx]
                     else:
-                        neuron_count['token_counts'][token_to_add[1]] = 1
-                else:
-                    print('No tagged tokens!')
-
-        else:
-            pass
-
-        if len(wrong_answers) > 0:
-            scores_wa, rnn_values_wa = all_function_deep([q_padded_tokens * len(wrong_answers), wa_padded_tokens])
-
-            for idx in range(0, len(wrong_answers)):
-                current_neuron_values = rnn_values_wa[idx, :, neuron_num]
-                current_neuron_values = current_neuron_values[-len(wa_tokens[idx]):]
-
-                tokens = keras.preprocessing.text.text_to_word_sequence(wrong_answers[idx], lower=True)
-                tagged = nltk.pos_tag(tokens)
-
-                if len(tagged) > 0:
-                    val_max = max(current_neuron_values)
-                    val_min = min(current_neuron_values)
-                    index_min = np.argmin(current_neuron_values)
-                    index_max = np.argmax(current_neuron_values)
-                    # print('max', val_max)
-                    # print('min', val_min)
-                    index_chosen = -1
-
-                    if abs(val_min) > val_max:
-                        index_chosen = index_min
-                    elif abs(val_min) < val_max:
-                        index_chosen = index_max
-                    else:
-                        pass
-                    # print(index_chosen)
-
-                    # print('wa')
-                    # print(wrong_answers)
-                    # print(wrong_answers[idx])
-
-                    # print(tagged)
-                    # print(index_chosen)
-                    token_to_add = tagged[index_chosen]
-                    # print(token_to_add)
-                    # neuron_count['tokens'].append(token_to_add)
-                    if token_to_add[1] in neuron_count['token_counts']:
-                        neuron_count['token_counts'][token_to_add[1]] = neuron_count['token_counts'][token_to_add[1]] + 1
-                    else:
-                        neuron_count['token_counts'][token_to_add[1]] = 1
-                else:
-                    print('No tagged tokens!')
-
-        else:
-            pass
-
+                        # data = {
+                        #     'data': ' '.join(all_tokens[idx]),
+                        #     'model': 'english-gum-ud-2.4-190531',
+                        #     'tokenizer': '',
+                        #     'tagger': '--tag',
+                        #     'parser': ''
+                        # }
+                        data = {
+                            'input': ' '.join(all_tokens[idx]),
+                        }
+                        # response = requests.post(udpipe_URL, headers=headers, data=data)
+                        response = requests.post(munderline_URL, headers=headers, data=data)
+                        response.encoding = 'utf-8'
+                        # parser_output = response.json()['result']
+                        parser_output = response.text
+                        pos_dict[i]['wa'][idx] = parser_output
+                    current_pos_scores = align_tokens_and_ud(tuples[idx], parser_output)
+                    # [('most', 0.73064023, 'ADJ', 'JJS'), ('of', 0.031687938, 'ADP', 'IN'), ('the', 0.008439351, 'DET', 'DT'), ('time', 7.566358e-05, 'NOUN', 'NN'), ('hijacking', 0.00023871037, 'VERB', 'VBG'), ('shifts', 0.00029278902, 'VERB', 'VBZ'), ('the', 0.00026579967, 'DET', 'DT'), ('main', 0.026925175, 'ADJ', 'JJ'), ('topic', 0.0046378975, 'NOUN', 'NN'), ('to', 0.0003025322, 'ADP', 'TO'), ('a', 0.00088415114, 'DET', 'DT'), ('different', 0.0012040904, 'ADJ', 'JJ'), ('one', 0.009830474, 'NUM', 'CD'), ('and', 0.00029199503, 'CCONJ', 'CC'), ('then', 0.0035359005, 'ADV', 'RB'), ('to', 0.00042696742, 'ADP', 'TO'), ('another', 0.00050246046, 'DET', 'DT'), ('different', 0.0010206797, 'ADJ', 'JJ'), ('one', 0.0062409323, 'NUM', 'CD'), ('and', 0.00012129463, 'CCONJ', 'CC'), ('so', 0.00026837253, 'ADV', 'RB'), ('on', 0.00025421553, 'ADP', 'IN')]
+                    for current_tuple in current_pos_scores:
+                        # current_tuple[2] = UPOS, current_tuple[2] = XPOS,
+                        if current_tuple[2] in neuron_count['token_counts']:
+                            neuron_count['token_counts'][current_tuple[2]] = neuron_count['token_counts'][
+                                                                                 current_tuple[2]] + abs(
+                                current_tuple[1])
+                        else:
+                            neuron_count['token_counts'][current_tuple[2]] = abs(current_tuple[1])
+            else:
+                pass
         # print(neuron_count)
-    neuron_counts.append(neuron_count)
+        neuron_counts.append(neuron_count)
 
+        if not os.path.exists(POS_DICT_PATH):
+            print('Saving new pos_dict file...')
+            with open(POS_DICT_PATH, 'w') as file:
+                json.dump(pos_dict, file)
+            print('Done.')
+    # %%
+    for neuron in neuron_counts:
+        total_attention = sum(neuron['token_counts'].values())
+        # print(total_attention)
+        remainders = {}
+        for key in neuron['token_counts']:
+            rounded_value = round(neuron['token_counts'][key] / total_attention * 100, 2)
+            remainders[key] = rounded_value - np.floor(rounded_value)
+            neuron['token_counts'][key] = rounded_value
+        # {'JJS': 10.55, 'IN': 7.46, 'DT': 10.7, 'NN': 7.2, 'VBG': 1.67, 'VBZ': 3.76, 'JJ': 4.19, 'TO': 0.09, 'CD': 4.2, 'CC': 2.26, 'RB': 7.34, 'LS': 6.37, 'VBD': 4.64, 'NNS': 1.94, 'VBN': 0.03, 'PRP': 7.16, 'MD': 9.69, 'VB': 3.65, 'VBP': 0.53, 'WP': 0.0, 'PRP$': 0.41, 'UH': 0.31, 'EX': 0.0, 'RP': 1.09, 'WRB': 0.0, 'JJR': 4.8}
+        # print(neuron['token_counts'])
+        # print(remainders)
+        pos_percents_rounded = {}
+        for key, value in neuron['token_counts'].items():
+            pos_percents_rounded[key] = np.floor(neuron['token_counts'][key])
+        remainders_desc = sorted(remainders.items(), key=lambda x: x[1], reverse=True)
+        # print(sum(neuron['token_counts'].values()))
+        # Largest Remainder Method to roughly split values to add up to 100%
+        # Also, JSON does not encode float32.
+        # https://en.wikipedia.org/wiki/Largest_remainder_method
+        # print(remainders_desc)
+        # print(pos_percents_rounded)
+        # print(100 - sum(pos_percents_rounded.values()))
+        to_allocate = 100 - sum(pos_percents_rounded.values())
+        for current_tuple in remainders_desc:
+            if to_allocate == 0:
+                break
+            else:
+                pos_percents_rounded[current_tuple[0]] += 1
+                to_allocate -= 1
+        # print(pos_percents_rounded)
+        # print(sum(pos_percents_rounded.values()))
+        for key in pos_percents_rounded:
+            neuron['token_counts'][key] = pos_percents_rounded[key]
+        current_time = time.time()
+        print('Elapsed time:', current_time - start_time, 'seconds')
+
+# %%
 with open(NEURON_COUNT_PATH, 'w') as file:
     json.dump(neuron_counts, file)
+
+end_time = time.time()
+print('Total time:', end_time - start_time, 'seconds')
