@@ -1,5 +1,7 @@
 # %%
-import time
+import notebook_util
+print(notebook_util.list_available_gpus())
+notebook_util.setup_one_gpu()
 import tensorflow as tf
 from keras import backend as K
 from keras.preprocessing.sequence import pad_sequences
@@ -9,7 +11,6 @@ import pickle
 import json
 import os
 import requests
-import re
 
 start_time = time.time()
 
@@ -127,6 +128,47 @@ def visualize_model_deep(model, question_lstm=True):
     return all_function, output_function
 
 
+def convert_texts_to_POS(texts, pos_dict, type, qa_pair_num):
+    texts_POS_raw = []
+    texts_POS_tokens = []
+    for idx in range(0, len(texts)):
+        ud_output = get_ud_POS_data(texts[idx], pos_dict, type, qa_pair_num, idx)
+        temp_raw = []
+        temp_tokens = []
+        for line in ud_output.split('\n'):
+            tab_split = line.split('\t')
+            if tab_split[0] != '#' and tab_split[0].strip() != '':
+                temp_raw.append(tab_split)
+                temp_tokens.append(tab_split[1])
+        texts_POS_raw.append(temp_raw)
+        texts_POS_tokens.append(' '.join(temp_tokens))
+    return texts_POS_raw, texts_POS_tokens
+
+
+def get_ud_POS_data(tokens, pos_dict, type, qa_pair_num, answer_num):
+    if qa_pair_num in pos_dict and answer_num in pos_dict[qa_pair_num][type]:
+        parser_output = pos_dict[qa_pair_num][type][answer_num]
+    else:
+        # data = {
+        #     'data': ' '.join(all_tokens[answer_num]),
+        #     'model': 'english-gum-ud-2.4-190531',
+        #     'tokenizer': '',
+        #     'tagger': '--tag',
+        #     'parser': ''
+        # }
+        data = {
+            # 'input': ' '.join(tokens),
+            'input': tokens
+        }
+        # response = requests.post(udpipe_URL, headers=headers, data=data)
+        response = requests.post(munderline_URL, headers=headers, data=data)
+        response.encoding = 'utf-8'
+        # parser_output = response.json()['result']
+        parser_output = response.text
+        pos_dict[qa_pair_num][type][answer_num] = parser_output
+    return parser_output
+
+
 def get_neuron_attention_per_token(rnn_values, texts, tokens, neuron):
     result = []
     all_tokens = []
@@ -134,10 +176,11 @@ def get_neuron_attention_per_token(rnn_values, texts, tokens, neuron):
         current_neuron_values = rnn_values[idx, :, neuron]
         current_neuron_values = current_neuron_values[-len(tokens[idx]):]
         words = [vocabulary_inv[x] for x in tokens[idx]]
-        for word_index in range(len(words) - 1, -1, -1):
-            # if re.match(r'[\\xa0]+', words[word_index]):
-            if words[word_index].replace(u'\xa0', ' ').strip() == '':
-                del words[word_index]
+
+        # for word_index in range(len(words) - 1, -1, -1):
+        #     # if re.match(r'[\\xa0]+', words[word_index]):
+        #     if words[word_index].replace(u'\xa0', ' ').strip() == '':
+        #         del words[word_index]
         current_strings = []
         for score, word in zip(current_neuron_values, words):
             current_string = (word, score)
@@ -157,10 +200,46 @@ def convert_from_ud_to_array(raw_ud_input):
 
 def align_tokens_and_ud(token_score_tuples, ud_output):
     result = []
-    temp = convert_from_ud_to_array(ud_output)
-    for index in range(len(temp)):
-        result.append((token_score_tuples[index][0], token_score_tuples[index][1], temp[index][3], temp[index][4]))
+    if len(token_score_tuples) != len(ud_output):
+        print('Alignment length not equal!')
+        print(len(token_score_tuples), token_score_tuples)
+        print(len(ud_output), ud_output)
+    pos_extra_index = 0
+    for tuple_index in range(len(token_score_tuples)):
+        if token_score_tuples[tuple_index][0].lower() != ud_output[tuple_index + pos_extra_index][1].lower():
+            print('Alignment token not equal!')
+            print(token_score_tuples[tuple_index][0])
+            print(ud_output[tuple_index + pos_extra_index][1])
+            if len(token_score_tuples) - 1 >= tuple_index and len(ud_output) + pos_extra_index - 1 >= tuple_index:
+                if token_score_tuples[tuple_index][0] != ud_output[tuple_index + pos_extra_index][1]:
+                    if len(token_score_tuples) - 1 >= tuple_index + 1:
+                        while token_score_tuples[tuple_index + 1][0] != ud_output[tuple_index + 1 + pos_extra_index][1]:
+                            pos_extra_index += 1
+            print('New alignment pos_extra_index:', pos_extra_index)
+            print(token_score_tuples[tuple_index][0])
+            print(ud_output[tuple_index + pos_extra_index][1])
+            if token_score_tuples[tuple_index][0].lower() == ud_output[tuple_index + pos_extra_index][1].lower():
+                result.append((token_score_tuples[tuple_index][0], token_score_tuples[tuple_index][1],
+                               ud_output[tuple_index + pos_extra_index][3], ud_output[tuple_index + pos_extra_index][4]))
+        else:
+            result.append((token_score_tuples[tuple_index][0], token_score_tuples[tuple_index][1],
+                   ud_output[tuple_index + pos_extra_index][3], ud_output[tuple_index + pos_extra_index][4]))
     return result
+
+# The code below ensures that the POS tagging result and the tokenized results align properly
+# def align_tokens_and_ud(token_score_tuples, ud_output):
+#     result = []
+#     temp = convert_from_ud_to_array(ud_output)
+#     pos_extra_index = 0
+#     for index in range(len(temp)):
+#         if len(token_score_tuples) - 1 >= index and len(temp) + pos_extra_index - 1 >= index:
+#             result.append((token_score_tuples[index][0], token_score_tuples[index][1], temp[index + pos_extra_index][3],
+#                            temp[index + pos_extra_index][4]))
+#             if token_score_tuples[index][0] != temp[index + pos_extra_index][1]:
+#                 if len(token_score_tuples) - 1 >= index + 1:
+#                     while token_score_tuples[index + 1][0] != temp[index + 1 + pos_extra_index][1]:
+#                         pos_extra_index += 1
+#     return result
 
 
 model = load_environment()
@@ -217,7 +296,7 @@ if os.path.exists(NEURON_COUNT_PATH):
     print('Done.')
 else:
     print('Generating new file...')
-    udpipe_URL = 'http://lindat.mff.cuni.cz/services/udpipe/api/process'
+    # udpipe_URL = 'http://lindat.mff.cuni.cz/services/udpipe/api/process'
     munderline_URL = 'http://iread.dfki.de/munderline/de_ud'
     headers = {
         'Content-Type': 'application/x-www-form-urlencoded; charset=utf-8'
@@ -238,10 +317,11 @@ else:
             'neuron': neuron_num,
             'token_counts': {}
         }
-        for i in range(1510, 1760):  # indices:
+        for i in range(0, len(qa_pairs)):  # indices:
             print('Generating activations for QA pair', i)
             if i not in pos_dict:
                 pos_dict[i] = {
+                    'q': {},
                     'ca': {},
                     'wa': {}
                 }
@@ -251,70 +331,84 @@ else:
             wrong_answers = answer_texts.loc[row['pool']]['answer'].values
             question = row['question']
             asked_questions[i] = question
-            q_tokens, q_padded_tokens = prepare_data([question])
-            ca_tokens, ca_padded_tokens = prepare_data(correct_answers)
-            wa_tokens, wa_padded_tokens = prepare_data(wrong_answers)
-            if len(correct_answers) > 0:
-                scores_ca, rnn_values_ca = all_function_deep([q_padded_tokens * len(correct_answers), ca_padded_tokens])
 
-                tuples, all_tokens = get_neuron_attention_per_token(rnn_values_ca, correct_answers, ca_tokens, neuron)
+            # Make new prepare_data method with POS tokens instead of raw "texts" input
+            question_POS, question_POS_tokens = convert_texts_to_POS([[question]], pos_dict, 'q', i)
+            correct_answers_POS, correct_answers_POS_tokens = convert_texts_to_POS(correct_answers, pos_dict, 'ca', i)
+            wrong_answers_POS, wrong_answers_POS_tokens = convert_texts_to_POS(wrong_answers, pos_dict, 'wa', i)
+
+            # q_tokens, q_padded_tokens = prepare_data([question])
+            # ca_tokens, ca_padded_tokens = prepare_data(correct_answers)
+            # wa_tokens, wa_padded_tokens = prepare_data(wrong_answers)
+            q_tokens, q_padded_tokens = prepare_data([question_POS_tokens])
+            ca_tokens, ca_padded_tokens = prepare_data(correct_answers_POS_tokens)
+            wa_tokens, wa_padded_tokens = prepare_data(wrong_answers_POS_tokens)
+
+            if len(correct_answers) > 0:
+                scores_ca, rnn_values_ca = all_function_deep([q_padded_tokens * len(correct_answers_POS_tokens), ca_padded_tokens])
+
+                tuples, all_tokens = get_neuron_attention_per_token(rnn_values_ca, correct_answers_POS_tokens, ca_tokens, neuron)
+
                 for idx in range(len(all_tokens)):
-                    if i in pos_dict and idx in pos_dict[i]['ca']:
-                        parser_output = pos_dict[i]['ca'][idx]
-                    else:
-                        # data = {
-                        #     'data': ' '.join(all_tokens[idx]),
-                        #     'model': 'english-gum-ud-2.4-190531',
-                        #     'tokenizer': '',
-                        #     'tagger': '--tag',
-                        #     'parser': ''
-                        # }
-                        data = {
-                            'input': ' '.join(all_tokens[idx]),
-                        }
-                        # response = requests.post(udpipe_URL, headers=headers, data=data)
-                        response = requests.post(munderline_URL, headers=headers, data=data)
-                        response.encoding = 'utf-8'
-                        # parser_output = response.json()['result']
-                        parser_output = response.text
-                        pos_dict[i]['ca'][idx] = parser_output
-                    current_pos_scores = align_tokens_and_ud(tuples[idx], parser_output)
+                #     if i in pos_dict and idx in pos_dict[i]['ca']:
+                #         parser_output = pos_dict[i]['ca'][idx]
+                #     else:
+                #         # data = {
+                #         #     'data': ' '.join(all_tokens[idx]),
+                #         #     'model': 'english-gum-ud-2.4-190531',
+                #         #     'tokenizer': '',
+                #         #     'tagger': '--tag',
+                #         #     'parser': ''
+                #         # }
+                #         data = {
+                #             'input': ' '.join(all_tokens[idx]),
+                #         }
+                #         # response = requests.post(udpipe_URL, headers=headers, data=data)
+                #         response = requests.post(munderline_URL, headers=headers, data=data)
+                #         response.encoding = 'utf-8'
+                #         # parser_output = response.json()['result']
+                #         parser_output = response.text
+                #         pos_dict[i]['ca'][idx] = parser_output
+
+                    # current_pos_scores = align_tokens_and_ud(tuples[idx], parser_output)
+                    current_pos_scores = align_tokens_and_ud(tuples[idx], correct_answers_POS[idx])
                     # [('most', 0.73064023, 'ADJ', 'JJS'), ('of', 0.031687938, 'ADP', 'IN'), ('the', 0.008439351, 'DET', 'DT'), ('time', 7.566358e-05, 'NOUN', 'NN'), ('hijacking', 0.00023871037, 'VERB', 'VBG'), ('shifts', 0.00029278902, 'VERB', 'VBZ'), ('the', 0.00026579967, 'DET', 'DT'), ('main', 0.026925175, 'ADJ', 'JJ'), ('topic', 0.0046378975, 'NOUN', 'NN'), ('to', 0.0003025322, 'ADP', 'TO'), ('a', 0.00088415114, 'DET', 'DT'), ('different', 0.0012040904, 'ADJ', 'JJ'), ('one', 0.009830474, 'NUM', 'CD'), ('and', 0.00029199503, 'CCONJ', 'CC'), ('then', 0.0035359005, 'ADV', 'RB'), ('to', 0.00042696742, 'ADP', 'TO'), ('another', 0.00050246046, 'DET', 'DT'), ('different', 0.0010206797, 'ADJ', 'JJ'), ('one', 0.0062409323, 'NUM', 'CD'), ('and', 0.00012129463, 'CCONJ', 'CC'), ('so', 0.00026837253, 'ADV', 'RB'), ('on', 0.00025421553, 'ADP', 'IN')]
                     for current_tuple in current_pos_scores:
                         # current_tuple[2] = UPOS, current_tuple[2] = XPOS,
                         if current_tuple[2] in neuron_count['token_counts']:
                             neuron_count['token_counts'][current_tuple[2]] = neuron_count['token_counts'][
-                                                                                 current_tuple[2]] + abs(current_tuple[1])
+                                                                                 current_tuple[2]] + abs(
+                                current_tuple[1])
                         else:
                             neuron_count['token_counts'][current_tuple[2]] = abs(current_tuple[1])
             else:
                 pass
 
             if len(wrong_answers) > 0:
-                scores_wa, rnn_values_wa = all_function_deep([q_padded_tokens * len(wrong_answers), wa_padded_tokens])
+                scores_wa, rnn_values_wa = all_function_deep([q_padded_tokens * len(wrong_answers_POS_tokens), wa_padded_tokens])
 
-                tuples, all_tokens = get_neuron_attention_per_token(rnn_values_wa, wrong_answers, wa_tokens, neuron)
+                tuples, all_tokens = get_neuron_attention_per_token(rnn_values_wa, wrong_answers_POS_tokens, wa_tokens, neuron)
                 for idx in range(len(all_tokens)):
-                    if i in pos_dict and idx in pos_dict[i]['wa']:
-                        parser_output = pos_dict[i]['wa'][idx]
-                    else:
-                        # data = {
-                        #     'data': ' '.join(all_tokens[idx]),
-                        #     'model': 'english-gum-ud-2.4-190531',
-                        #     'tokenizer': '',
-                        #     'tagger': '--tag',
-                        #     'parser': ''
-                        # }
-                        data = {
-                            'input': ' '.join(all_tokens[idx]),
-                        }
-                        # response = requests.post(udpipe_URL, headers=headers, data=data)
-                        response = requests.post(munderline_URL, headers=headers, data=data)
-                        response.encoding = 'utf-8'
-                        # parser_output = response.json()['result']
-                        parser_output = response.text
-                        pos_dict[i]['wa'][idx] = parser_output
-                    current_pos_scores = align_tokens_and_ud(tuples[idx], parser_output)
+                    # if i in pos_dict and idx in pos_dict[i]['wa']:
+                    #     parser_output = pos_dict[i]['wa'][idx]
+                    # else:
+                    #     # data = {
+                    #     #     'data': ' '.join(all_tokens[idx]),
+                    #     #     'model': 'english-gum-ud-2.4-190531',
+                    #     #     'tokenizer': '',
+                    #     #     'tagger': '--tag',
+                    #     #     'parser': ''
+                    #     # }
+                    #     data = {
+                    #         'input': ' '.join(all_tokens[idx]),
+                    #     }
+                    #     # response = requests.post(udpipe_URL, headers=headers, data=data)
+                    #     response = requests.post(munderline_URL, headers=headers, data=data)
+                    #     response.encoding = 'utf-8'
+                    #     # parser_output = response.json()['result']
+                    #     parser_output = response.text
+                    #     pos_dict[i]['wa'][idx] = parser_output
+                    current_pos_scores = align_tokens_and_ud(tuples[idx], wrong_answers_POS[idx])
                     # [('most', 0.73064023, 'ADJ', 'JJS'), ('of', 0.031687938, 'ADP', 'IN'), ('the', 0.008439351, 'DET', 'DT'), ('time', 7.566358e-05, 'NOUN', 'NN'), ('hijacking', 0.00023871037, 'VERB', 'VBG'), ('shifts', 0.00029278902, 'VERB', 'VBZ'), ('the', 0.00026579967, 'DET', 'DT'), ('main', 0.026925175, 'ADJ', 'JJ'), ('topic', 0.0046378975, 'NOUN', 'NN'), ('to', 0.0003025322, 'ADP', 'TO'), ('a', 0.00088415114, 'DET', 'DT'), ('different', 0.0012040904, 'ADJ', 'JJ'), ('one', 0.009830474, 'NUM', 'CD'), ('and', 0.00029199503, 'CCONJ', 'CC'), ('then', 0.0035359005, 'ADV', 'RB'), ('to', 0.00042696742, 'ADP', 'TO'), ('another', 0.00050246046, 'DET', 'DT'), ('different', 0.0010206797, 'ADJ', 'JJ'), ('one', 0.0062409323, 'NUM', 'CD'), ('and', 0.00012129463, 'CCONJ', 'CC'), ('so', 0.00026837253, 'ADV', 'RB'), ('on', 0.00025421553, 'ADP', 'IN')]
                     for current_tuple in current_pos_scores:
                         # current_tuple[2] = UPOS, current_tuple[2] = XPOS,
