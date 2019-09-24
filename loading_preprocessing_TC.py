@@ -2,23 +2,25 @@ import re
 import string
 import time
 import xml.etree.ElementTree as ET
+from unicodedata import normalize
 
 # import enchant
 import numpy as np
 import pandas as pd
 import spacy
-# import hunspell
+import hunspell
 # Try this if you get a problem with "spacy.load('en')":
 # pip install spacy && python -m spacy download en
 from nltk.corpus import stopwords
 from nltk.stem.snowball import EnglishStemmer
 
-# hobj = hunspell.HunSpell('/usr/share/hunspell/en_US.dic', '/usr/share/hunspell/en_US.aff')
+hobj = hunspell.HunSpell('/usr/share/hunspell/en_US.dic', '/usr/share/hunspell/en_US.aff')
 # d = enchant.Dict("en_US")
 stemmer = EnglishStemmer()
 nlp = spacy.load('en')
 eng_stopwords = set(stopwords.words("english"))
 num_str = [str(i) for i in range(0, 9)]
+CUSTOM_CLEAN = ['\xa0']
 
 emoticons = {":-)": "happy", ":)": "happy", ":-]"":]": "happy", ":-3": "happy", ":3": "happy", ":->": "happy",
              ":>": "happy",
@@ -71,7 +73,8 @@ class Text():
                   'LANGUAGE': 'language', 'ORG': 'organization'}
 
     def __init__(self, text: str, text_type: str, text_id: str):
-        self.text = text
+        # self.text = text
+        self.text = normalize('NFKD', text)
         self.text_type = text_type
         self.text_id = text_id
 
@@ -109,19 +112,19 @@ class Text():
         return self.named_entities
 
     # PROD: Commented this out as I am not allowed to install libhunspell-dev in the prod environment
-    # def spell_check(self):
-    #     if len(self.tokens) == 0:
-    #         self.tokenize()
-    #     self.spellchecked_text = []
-    #     for token in self.tokens:
-    #         # if len(token) > 2 and not d.check(token) and len(d.suggest(token)) > 0:
-    #         if len(token) > 2 and not hobj.spell(token) and len(hobj.suggest(token)) > 0:
-    #             self.spellchecked_text.append(hobj.suggest(token)[0])
-    #         else:
-    #             self.spellchecked_text.append(token)
-    #     self.spellchecked_text = ' '.join(self.spellchecked_text)
-    #     # spellchecked_tokens = [str(token.text) for token in nlp(self.spellchecked_text)]
-    #     return self.spellchecked_text
+    def spell_check(self):
+        if len(self.tokens) == 0:
+            self.tokenize()
+        self.spellchecked_text = []
+        for token in self.tokens:
+            # if len(token) > 2 and not d.check(token) and len(d.suggest(token)) > 0:
+            if len(token) > 2 and not hobj.spell(token) and len(hobj.suggest(token)) > 0:
+                self.spellchecked_text.append(hobj.suggest(token)[0])
+            else:
+                self.spellchecked_text.append(token)
+        self.spellchecked_text = ' '.join(self.spellchecked_text)
+        self.spellchecked_tokens = [str(token.text) for token in nlp(self.spellchecked_text)]
+        return self.spellchecked_text
 
     def replace_ne(self):
         if len(self.named_entities) == 0:
@@ -130,14 +133,23 @@ class Text():
         for ent in self.named_entities:
             if ent[1] != 'NOT_NE':
                 self.placeholders_text = self.placeholders_text.replace(ent[0], self.tags2words[ent[1]])
-        placeholders_tokens = [str(token.text) for token in nlp(self.placeholders_text)]
+        # placeholders_tokens = [str(token.text) for token in nlp(self.placeholders_text)]
         return self.placeholders_text
 
     def clean(self):
-        self.clean_text = self.extract_emoticons(self.text)
+        # self.clean_text = self.remove_custom_symbols(self.text)
+        self.clean_text = self.extract_emoticons(self.clean_text)
         self.clean_text = self.clean_punctuation(self.clean_text)
         self.clean_tokens = [str(token.text) for token in nlp(self.clean_text)]
         return self.clean_text
+
+    def remove_custom_symbols(self, text):
+        # First checked for u'\xa0', but now just normalize all unicode
+        # if u'\xa0' in text:
+        #     print('Found \\xao:', text)
+        #     print('Replaced:', text.replace(u'\xa0', u' '))
+        print('Normalized:', normalize('NFKD', text))
+        return normalize('NFKD', text)
 
     def extract_emoticons(self, text, tag=0):
         transformed_text = text
@@ -174,7 +186,7 @@ class Text():
 
     def heavy_clean(self):
         self.heavy_clean_text = ' '.join([y.lower() for y in self.text.split() if
-                                          not y.lower() in eng_stopwords and not y in num_str and not y in string.punctuation])
+                                          not y.lower() in eng_stopwords and not y in num_str and not y in string.punctuation and not y in CUSTOM_CLEAN])
         self.heavy_clean_tokens = [str(token.text) for token in nlp(self.heavy_clean_text)]
         return self.heavy_clean_text
 

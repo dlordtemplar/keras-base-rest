@@ -14,7 +14,7 @@ if not os.path.isdir(DATA_PATH):
 # stemmer = EnglishStemmer()
 # nlp = spacy.load('en')
 
-text = Text("Helo!!! Here :))) How is Qatar? ", "answer", 1)
+text = Text("Helo!!! Here :))) How is\xa0 Qatar? ", "answer", 1)
 print('Sample:', text)
 print(text.tokenize())
 print(text.stemmatize())
