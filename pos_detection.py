@@ -1,5 +1,8 @@
 # %%
+from requests.adapters import HTTPAdapter
+
 import notebook_util
+
 print(notebook_util.list_available_gpus())
 notebook_util.setup_one_gpu()
 import tensorflow as tf
@@ -11,6 +14,15 @@ import pickle
 import json
 import os
 import requests
+from requests.exceptions import ConnectionError
+from urllib3.util.retry import Retry
+
+from spacy.gold import align
+
+# bert_tokens = ["obama", "'", "s", "podcast"]
+# spacy_tokens = ["obama", "'s", "podcast"]
+# alignment = align(bert_tokens, spacy_tokens)
+# cost, a2b, b2a, a2b_multi, b2a_multi = alignment
 
 start_time = time.time()
 
@@ -33,6 +45,8 @@ answer_texts = None
 graph = None
 
 NEURON_MAX = 128
+udpipe_URL = 'http://lindat.mff.cuni.cz/services/udpipe/api/process'
+munderline_URL = 'http://iread.dfki.de/munderline/de_ud'
 
 
 def load_data():
@@ -137,7 +151,7 @@ def convert_texts_to_POS(texts, pos_dict, type, qa_pair_num):
         temp_tokens = []
         for line in ud_output.split('\n'):
             tab_split = line.split('\t')
-            if tab_split[0] != '#' and tab_split[0].strip() != '':
+            if not tab_split[0].startswith('#') and tab_split[0].strip() != '':
                 temp_raw.append(tab_split)
                 temp_tokens.append(tab_split[1])
         texts_POS_raw.append(temp_raw)
@@ -146,26 +160,30 @@ def convert_texts_to_POS(texts, pos_dict, type, qa_pair_num):
 
 
 def get_ud_POS_data(tokens, pos_dict, type, qa_pair_num, answer_num):
-    if qa_pair_num in pos_dict and answer_num in pos_dict[qa_pair_num][type]:
-        parser_output = pos_dict[qa_pair_num][type][answer_num]
+    if str(qa_pair_num) in pos_dict and type in pos_dict[str(qa_pair_num)] and str(answer_num) in \
+            pos_dict[str(qa_pair_num)][type]:
+        parser_output = pos_dict[str(qa_pair_num)][type][str(answer_num)]
     else:
-        # data = {
-        #     'data': ' '.join(all_tokens[answer_num]),
-        #     'model': 'english-gum-ud-2.4-190531',
-        #     'tokenizer': '',
-        #     'tagger': '--tag',
-        #     'parser': ''
-        # }
         data = {
-            # 'input': ' '.join(tokens),
-            'input': tokens
+            'data': tokens,
+            'model': 'english-gum-ud-2.4-190531',
+            'tokenizer': '',
+            'tagger': '--tag',
+            'parser': ''
         }
-        # response = requests.post(udpipe_URL, headers=headers, data=data)
-        response = requests.post(munderline_URL, headers=headers, data=data)
+
+        s = requests.Session()
+        retries = Retry(total=5, backoff_factor=1, status_forcelist=[502, 503, 504])
+        s.mount('http://', HTTPAdapter(max_retries=retries))
+
+        response = s.post(udpipe_URL, headers=headers, data=data)
         response.encoding = 'utf-8'
-        # parser_output = response.json()['result']
-        parser_output = response.text
-        pos_dict[qa_pair_num][type][answer_num] = parser_output
+        parser_output = response.json()['result']
+        pos_dict[str(qa_pair_num)][type][str(answer_num)] = parser_output
+        print('Saving new pos_dict file...')
+        with open(POS_DICT_PATH, 'w') as file:
+            json.dump(pos_dict, file)
+        print('Done.')
     return parser_output
 
 
@@ -177,10 +195,6 @@ def get_neuron_attention_per_token(rnn_values, texts, tokens, neuron):
         current_neuron_values = current_neuron_values[-len(tokens[idx]):]
         words = [vocabulary_inv[x] for x in tokens[idx]]
 
-        # for word_index in range(len(words) - 1, -1, -1):
-        #     # if re.match(r'[\\xa0]+', words[word_index]):
-        #     if words[word_index].replace(u'\xa0', ' ').strip() == '':
-        #         del words[word_index]
         current_strings = []
         for score, word in zip(current_neuron_values, words):
             current_string = (word, score)
@@ -200,31 +214,38 @@ def convert_from_ud_to_array(raw_ud_input):
 
 def align_tokens_and_ud(token_score_tuples, ud_output):
     result = []
-    if len(token_score_tuples) != len(ud_output):
-        print('Alignment length not equal!')
-        print(len(token_score_tuples), token_score_tuples)
-        print(len(ud_output), ud_output)
-    pos_extra_index = 0
+    score_tuples_a = []
+    ud_out_b = []
+    for tuple in token_score_tuples:
+        score_tuples_a.append(tuple[0].lower())
+    for row in ud_output:
+        ud_out_b.append(row[1].lower())
+    alignment = align(score_tuples_a, ud_out_b)
+    cost, a2b, b2a, a2b_multi, b2a_multi = alignment
+
+    debug_print = False
     for tuple_index in range(len(token_score_tuples)):
-        if token_score_tuples[tuple_index][0].lower() != ud_output[tuple_index + pos_extra_index][1].lower():
-            print('Alignment token not equal!')
-            print(token_score_tuples[tuple_index][0])
-            print(ud_output[tuple_index + pos_extra_index][1])
-            if len(token_score_tuples) - 1 >= tuple_index and len(ud_output) + pos_extra_index - 1 >= tuple_index:
-                if token_score_tuples[tuple_index][0] != ud_output[tuple_index + pos_extra_index][1]:
-                    if len(token_score_tuples) - 1 >= tuple_index + 1:
-                        while token_score_tuples[tuple_index + 1][0] != ud_output[tuple_index + 1 + pos_extra_index][1]:
-                            pos_extra_index += 1
-            print('New alignment pos_extra_index:', pos_extra_index)
-            print(token_score_tuples[tuple_index][0])
-            print(ud_output[tuple_index + pos_extra_index][1])
-            if token_score_tuples[tuple_index][0].lower() == ud_output[tuple_index + pos_extra_index][1].lower():
-                result.append((token_score_tuples[tuple_index][0], token_score_tuples[tuple_index][1],
-                               ud_output[tuple_index + pos_extra_index][3], ud_output[tuple_index + pos_extra_index][4]))
-        else:
+        if a2b[tuple_index] != -1:
             result.append((token_score_tuples[tuple_index][0], token_score_tuples[tuple_index][1],
-                   ud_output[tuple_index + pos_extra_index][3], ud_output[tuple_index + pos_extra_index][4]))
+                           ud_output[a2b[tuple_index]][3], ud_output[a2b[tuple_index]][4]))
+        else:
+            debug_print = True
+
+    # if len(a2b_multi) > 0:
+    #     debug_print = True
+    #     print('a2b_multi', a2b_multi)
+    # if len(b2a_multi) > 0:
+    #     debug_print = True
+    #     print('b2a_multi', b2a_multi)
+
+    # if debug_print:
+    #     print('a', score_tuples_a)
+    #     print('a2b', a2b)
+    #     print('b', ud_out_b)
+    #     print('b2a', b2a)
+
     return result
+
 
 # The code below ensures that the POS tagging result and the tokenized results align properly
 # def align_tokens_and_ud(token_score_tuples, ud_output):
@@ -246,7 +267,6 @@ model = load_environment()
 print("Finished loading.")
 
 indices = [0, 1]
-neuron = 0
 
 # Start actual visualization
 all_highlighted_wrong_answers = []
@@ -290,21 +310,19 @@ neuron_counts
 neuron_counts = []
 
 if os.path.exists(NEURON_COUNT_PATH):
-    print('Loading existing file...')
+    print('Loading existing neuron_count.json ...')
     with open(NEURON_COUNT_PATH, 'r') as file:
         neuron_counts = json.load(file)
     print('Done.')
 else:
     print('Generating new file...')
-    # udpipe_URL = 'http://lindat.mff.cuni.cz/services/udpipe/api/process'
-    munderline_URL = 'http://iread.dfki.de/munderline/de_ud'
     headers = {
         'Content-Type': 'application/x-www-form-urlencoded; charset=utf-8'
     }
 
     # Every neuron will react to the same tokens/POS tags, so only call to server once per input instead of 1790x
     if os.path.exists(POS_DICT_PATH):
-        print('Loading existing file...')
+        print('Loading existing pos_dict.json ...')
         with open(POS_DICT_PATH, 'r') as file:
             pos_dict = json.load(file)
         print('Done.')
@@ -312,15 +330,17 @@ else:
         pos_dict = {}
 
     for neuron_num in range(NEURON_MAX):
+    # for neuron_num in range(1):
         print('neuron', neuron_num)
         neuron_count = {
             'neuron': neuron_num,
             'token_counts': {}
         }
         for i in range(0, len(qa_pairs)):  # indices:
+            # for i in range(0, 2):  # indices:
             print('Generating activations for QA pair', i)
-            if i not in pos_dict:
-                pos_dict[i] = {
+            if str(i) not in pos_dict:
+                pos_dict[str(i)] = {
                     'q': {},
                     'ca': {},
                     'wa': {}
@@ -345,89 +365,51 @@ else:
             wa_tokens, wa_padded_tokens = prepare_data(wrong_answers_POS_tokens)
 
             if len(correct_answers) > 0:
-                scores_ca, rnn_values_ca = all_function_deep([q_padded_tokens * len(correct_answers_POS_tokens), ca_padded_tokens])
+                scores_ca, rnn_values_ca = all_function_deep(
+                    [q_padded_tokens * len(correct_answers_POS_tokens), ca_padded_tokens])
 
-                tuples, all_tokens = get_neuron_attention_per_token(rnn_values_ca, correct_answers_POS_tokens, ca_tokens, neuron)
+                tuples, all_tokens = get_neuron_attention_per_token(rnn_values_ca, correct_answers_POS_tokens,
+                                                                    ca_tokens, neuron_num)
 
                 for idx in range(len(all_tokens)):
-                #     if i in pos_dict and idx in pos_dict[i]['ca']:
-                #         parser_output = pos_dict[i]['ca'][idx]
-                #     else:
-                #         # data = {
-                #         #     'data': ' '.join(all_tokens[idx]),
-                #         #     'model': 'english-gum-ud-2.4-190531',
-                #         #     'tokenizer': '',
-                #         #     'tagger': '--tag',
-                #         #     'parser': ''
-                #         # }
-                #         data = {
-                #             'input': ' '.join(all_tokens[idx]),
-                #         }
-                #         # response = requests.post(udpipe_URL, headers=headers, data=data)
-                #         response = requests.post(munderline_URL, headers=headers, data=data)
-                #         response.encoding = 'utf-8'
-                #         # parser_output = response.json()['result']
-                #         parser_output = response.text
-                #         pos_dict[i]['ca'][idx] = parser_output
-
                     # current_pos_scores = align_tokens_and_ud(tuples[idx], parser_output)
                     current_pos_scores = align_tokens_and_ud(tuples[idx], correct_answers_POS[idx])
                     # [('most', 0.73064023, 'ADJ', 'JJS'), ('of', 0.031687938, 'ADP', 'IN'), ('the', 0.008439351, 'DET', 'DT'), ('time', 7.566358e-05, 'NOUN', 'NN'), ('hijacking', 0.00023871037, 'VERB', 'VBG'), ('shifts', 0.00029278902, 'VERB', 'VBZ'), ('the', 0.00026579967, 'DET', 'DT'), ('main', 0.026925175, 'ADJ', 'JJ'), ('topic', 0.0046378975, 'NOUN', 'NN'), ('to', 0.0003025322, 'ADP', 'TO'), ('a', 0.00088415114, 'DET', 'DT'), ('different', 0.0012040904, 'ADJ', 'JJ'), ('one', 0.009830474, 'NUM', 'CD'), ('and', 0.00029199503, 'CCONJ', 'CC'), ('then', 0.0035359005, 'ADV', 'RB'), ('to', 0.00042696742, 'ADP', 'TO'), ('another', 0.00050246046, 'DET', 'DT'), ('different', 0.0010206797, 'ADJ', 'JJ'), ('one', 0.0062409323, 'NUM', 'CD'), ('and', 0.00012129463, 'CCONJ', 'CC'), ('so', 0.00026837253, 'ADV', 'RB'), ('on', 0.00025421553, 'ADP', 'IN')]
                     for current_tuple in current_pos_scores:
-                        # current_tuple[2] = UPOS, current_tuple[2] = XPOS,
-                        if current_tuple[2] in neuron_count['token_counts']:
-                            neuron_count['token_counts'][current_tuple[2]] = neuron_count['token_counts'][
-                                                                                 current_tuple[2]] + abs(
+                        # current_tuple[2] = UPOS, current_tuple[3] = XPOS,
+                        if current_tuple[3] in neuron_count['token_counts']:
+                            neuron_count['token_counts'][current_tuple[3]] = neuron_count['token_counts'][
+                                                                                 current_tuple[3]] + abs(
                                 current_tuple[1])
                         else:
-                            neuron_count['token_counts'][current_tuple[2]] = abs(current_tuple[1])
+                            neuron_count['token_counts'][current_tuple[3]] = abs(current_tuple[1])
             else:
                 pass
 
             if len(wrong_answers) > 0:
-                scores_wa, rnn_values_wa = all_function_deep([q_padded_tokens * len(wrong_answers_POS_tokens), wa_padded_tokens])
+                scores_wa, rnn_values_wa = all_function_deep(
+                    [q_padded_tokens * len(wrong_answers_POS_tokens), wa_padded_tokens])
 
-                tuples, all_tokens = get_neuron_attention_per_token(rnn_values_wa, wrong_answers_POS_tokens, wa_tokens, neuron)
+                tuples, all_tokens = get_neuron_attention_per_token(rnn_values_wa, wrong_answers_POS_tokens, wa_tokens,
+                                                                    neuron_num)
                 for idx in range(len(all_tokens)):
-                    # if i in pos_dict and idx in pos_dict[i]['wa']:
-                    #     parser_output = pos_dict[i]['wa'][idx]
-                    # else:
-                    #     # data = {
-                    #     #     'data': ' '.join(all_tokens[idx]),
-                    #     #     'model': 'english-gum-ud-2.4-190531',
-                    #     #     'tokenizer': '',
-                    #     #     'tagger': '--tag',
-                    #     #     'parser': ''
-                    #     # }
-                    #     data = {
-                    #         'input': ' '.join(all_tokens[idx]),
-                    #     }
-                    #     # response = requests.post(udpipe_URL, headers=headers, data=data)
-                    #     response = requests.post(munderline_URL, headers=headers, data=data)
-                    #     response.encoding = 'utf-8'
-                    #     # parser_output = response.json()['result']
-                    #     parser_output = response.text
-                    #     pos_dict[i]['wa'][idx] = parser_output
                     current_pos_scores = align_tokens_and_ud(tuples[idx], wrong_answers_POS[idx])
                     # [('most', 0.73064023, 'ADJ', 'JJS'), ('of', 0.031687938, 'ADP', 'IN'), ('the', 0.008439351, 'DET', 'DT'), ('time', 7.566358e-05, 'NOUN', 'NN'), ('hijacking', 0.00023871037, 'VERB', 'VBG'), ('shifts', 0.00029278902, 'VERB', 'VBZ'), ('the', 0.00026579967, 'DET', 'DT'), ('main', 0.026925175, 'ADJ', 'JJ'), ('topic', 0.0046378975, 'NOUN', 'NN'), ('to', 0.0003025322, 'ADP', 'TO'), ('a', 0.00088415114, 'DET', 'DT'), ('different', 0.0012040904, 'ADJ', 'JJ'), ('one', 0.009830474, 'NUM', 'CD'), ('and', 0.00029199503, 'CCONJ', 'CC'), ('then', 0.0035359005, 'ADV', 'RB'), ('to', 0.00042696742, 'ADP', 'TO'), ('another', 0.00050246046, 'DET', 'DT'), ('different', 0.0010206797, 'ADJ', 'JJ'), ('one', 0.0062409323, 'NUM', 'CD'), ('and', 0.00012129463, 'CCONJ', 'CC'), ('so', 0.00026837253, 'ADV', 'RB'), ('on', 0.00025421553, 'ADP', 'IN')]
                     for current_tuple in current_pos_scores:
-                        # current_tuple[2] = UPOS, current_tuple[2] = XPOS,
-                        if current_tuple[2] in neuron_count['token_counts']:
-                            neuron_count['token_counts'][current_tuple[2]] = neuron_count['token_counts'][
-                                                                                 current_tuple[2]] + abs(
+                        # current_tuple[2] = UPOS, current_tuple[3] = XPOS,
+                        if current_tuple[3] in neuron_count['token_counts']:
+                            neuron_count['token_counts'][current_tuple[3]] = neuron_count['token_counts'][
+                                                                                 current_tuple[3]] + abs(
                                 current_tuple[1])
                         else:
-                            neuron_count['token_counts'][current_tuple[2]] = abs(current_tuple[1])
+                            neuron_count['token_counts'][current_tuple[3]] = abs(current_tuple[1])
             else:
                 pass
         # print(neuron_count)
         neuron_counts.append(neuron_count)
+        current_time = time.time()
+        print('Elapsed time:', current_time - start_time, 'seconds')
 
-        if not os.path.exists(POS_DICT_PATH):
-            print('Saving new pos_dict file...')
-            with open(POS_DICT_PATH, 'w') as file:
-                json.dump(pos_dict, file)
-            print('Done.')
     # %%
     for neuron in neuron_counts:
         total_attention = sum(neuron['token_counts'].values())
@@ -462,12 +444,69 @@ else:
         # print(sum(pos_percents_rounded.values()))
         for key in pos_percents_rounded:
             neuron['token_counts'][key] = pos_percents_rounded[key]
-        current_time = time.time()
-        print('Elapsed time:', current_time - start_time, 'seconds')
 
-# %%
-with open(NEURON_COUNT_PATH, 'w') as file:
-    json.dump(neuron_counts, file)
+    # %%
+    with open(NEURON_COUNT_PATH, 'w') as file:
+        json.dump(neuron_counts, file)
 
 end_time = time.time()
 print('Total time:', end_time - start_time, 'seconds')
+
+key_set = set()
+for item in neuron_counts:
+    for key in list(item['token_counts'].keys()):
+        key_set.add(key)
+
+# ['$', "''", 'CC', 'CD', 'DT', 'EX', 'FW', 'IN', 'JJ', 'JJR', 'JJS', 'MD', 'NN', 'NNP', 'NNPS', 'NNS', 'PDT', 'POS', 'PRP', 'PRP$', 'RB', 'RBR', 'RBS', 'RP', 'TO', 'UH', 'VB', 'VBD', 'VBG', 'VBN', 'VBP', 'VBZ', 'WDT', 'WP', 'WP$', 'WRB']
+# UD UPOS
+# ['ADJ', 'ADP', 'ADV', 'AUX', 'CCONJ', 'DET', 'INTJ', 'NOUN', 'NUM', 'PART', 'PRON', 'PROPN', 'PUNCT', 'SCONJ', 'SYM', 'VERB', 'X']
+# UD XPOS
+# ["''", '-LRB-', '-RRB-', '-RSB-', '.', ':', 'ADJ', 'ADP', 'ADV', 'AUX', 'CC', 'CCONJ', 'CD', 'DET', 'DT', 'EX', 'FW', 'IN', 'INTJ', 'JJ', 'JJR', 'JJS', 'LS', 'MD', 'NN', 'NNP', 'NNPS', 'NNS', 'NOUN', 'NUM', 'PART', 'PDT', 'POS', 'PRON', 'PROPN', 'PRP', 'PRP$', 'PUNCT', 'RB', 'RBR', 'RBS', 'RP', 'SCONJ', 'SYM', 'TO', 'UH', 'VB', 'VBD', 'VBG', 'VBN', 'VBP', 'VBZ', 'VERB', 'WDT', 'WP', 'WP$', 'WRB', 'X', '``']
+print(sorted(key_set))
+key_list = ["''", '-LRB-', '-RRB-', '-RSB-', '.', ':', 'ADJ', 'ADP', 'ADV', 'AUX', 'CC', 'CCONJ', 'CD', 'DET', 'DT',
+            'EX', 'FW', 'IN', 'INTJ', 'JJ', 'JJR', 'JJS', 'LS', 'MD', 'NN', 'NNP', 'NNPS', 'NNS', 'NOUN', 'NUM', 'PART',
+            'PDT', 'POS', 'PRON', 'PROPN', 'PRP', 'PRP$', 'PUNCT', 'RB', 'RBR', 'RBS', 'RP', 'SCONJ', 'SYM', 'TO', 'UH',
+            'VB', 'VBD', 'VBG', 'VBN', 'VBP', 'VBZ', 'VERB', 'WDT', 'WP', 'WP$', 'WRB', 'X', '``']
+
+neuron_nums = []
+for num in range(128):
+    neuron_nums.append('Neuron ' + str(num))
+# print(neuron_nums)
+
+key_per_neuron = {"''": [], '-LRB-': [], '-RRB-': [], '-RSB-': [], '.': [], ':': [], 'ADJ': [], 'ADP': [], 'ADV': [],
+                  'AUX': [], 'CC': [], 'CCONJ': [], 'CD': [], 'DET': [], 'DT': [],
+                  'EX': [], 'FW': [], 'IN': [], 'INTJ': [], 'JJ': [], 'JJR': [], 'JJS': [], 'LS': [], 'MD': [],
+                  'NN': [], 'NNP': [], 'NNPS': [], 'NNS': [], 'NOUN': [], 'NUM': [], 'PART': [],
+                  'PDT': [], 'POS': [], 'PRON': [], 'PROPN': [], 'PRP': [], 'PRP$': [], 'PUNCT': [], 'RB': [],
+                  'RBR': [], 'RBS': [], 'RP': [], 'SCONJ': [], 'SYM': [], 'TO': [], 'UH': [],
+                  'VB': [], 'VBD': [], 'VBG': [], 'VBN': [], 'VBP': [], 'VBZ': [], 'VERB': [], 'WDT': [], 'WP': [],
+                  'WP$': [], 'WRB': [], 'X': [], '``': []}
+for neuron in neuron_counts:
+    for key in key_list:
+        if key not in neuron['token_counts']:
+            key_per_neuron[key].append(0)
+        else:
+            key_per_neuron[key].append(neuron['token_counts'][key])
+# print(key_per_neuron)
+
+# %%
+
+# Values
+trace_x = []
+# Labels
+trace_y = []
+
+plotly_tsne = []
+for key in key_list:
+    trace_neuron = {
+        'name': key,
+        'x': key_per_neuron[key],
+        'y': neuron_nums,
+        'orientation': 'h',
+        'type': 'bar'
+    }
+    plotly_tsne.append(trace_neuron)
+
+plotly_tsne_as_json = pd.Series(plotly_tsne).to_json(orient='values')
+with open(POS_PER_NEURON_PATH, 'w') as file:
+    json.dump(plotly_tsne_as_json, file)
