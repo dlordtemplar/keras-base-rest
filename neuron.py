@@ -610,9 +610,22 @@ def questions():
     return plotly_all_questions
 
 
-@bp.route('/pos', strict_slashes=False, methods=['GET', 'POST'])
-def pos():
-    with open('out/data/semeval/pos_per_neuron.json', 'r') as file:
+@bp.route('/pos/ptb', strict_slashes=False, methods=['GET', 'POST'])
+def pos_ptb():
+    with open('out/data/semeval/pos_per_neuron_ptb.json', 'r') as file:
         plotly_pos = json.load(file)
+    return plotly_pos
 
+
+@bp.route('/pos/upos', strict_slashes=False, methods=['GET', 'POST'])
+def pos_upos():
+    with open('out/data/semeval/pos_per_neuron_upos.json', 'r') as file:
+        plotly_pos = json.load(file)
+    return plotly_pos
+
+
+@bp.route('/pos/xpos', strict_slashes=False, methods=['GET', 'POST'])
+def pos_xpos():
+    with open('out/data/semeval/pos_per_neuron_xpos.json', 'r') as file:
+        plotly_pos = json.load(file)
     return plotly_pos
