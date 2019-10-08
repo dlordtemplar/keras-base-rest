@@ -629,3 +629,10 @@ def pos_xpos():
     with open('out/data/semeval/pos_per_neuron_xpos.json', 'r') as file:
         plotly_pos = json.load(file)
     return plotly_pos
+
+
+@bp.route('/tsne_neurons/<perplexity>', strict_slashes=False, methods=['GET', 'POST'])
+def tsne_neurons(perplexity):
+    with open('out/data/semeval/tsne_neurons_points_p' + str(perplexity) + '.json', 'r') as file:
+        plotly_tsne_neurons = json.load(file)
+    return plotly_tsne_neurons
