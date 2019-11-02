@@ -1,3 +1,4 @@
+import random
 import json
 import pickle
 
@@ -591,6 +592,154 @@ def pair():
                     'neuron_num': neuron_num,
                     'neuron_display_ca': neuron_display_ca,
                     'neuron_display_wa': neuron_display_wa,
+                    'scale': scale,
+                    'texts_len': len(qa_pairs),
+                    'scores_ca': scores_ca,
+                    'scores_wa': scores_wa,
+                    # plotly
+                    'plotly_tsne': plotly_tsne,
+                    'pl_ca_heatmaps': pl_ca_heatmaps,
+                    'pl_wa_heatmaps': pl_wa_heatmaps
+                    })
+
+
+@bp.route('/live/load', strict_slashes=False, methods=['GET', 'POST'])
+def live_load():
+    global qa_pairs
+
+    data = json.loads(request.data)
+
+    pair_num = data['pair_num']
+
+    row = qa_pairs.iloc[pair_num]
+    correct_answers = answer_texts.loc[row['answer_ids']]['answer'].values
+    wrong_answers = answer_texts.loc[row['pool']]['answer'].values
+    question = row['question']
+
+    return jsonify({'question': question,
+                    'wrong_answers': wrong_answers.tolist(),
+                    'correct_answers': correct_answers.tolist(),
+                    'pair_num': pair_num,
+                    })
+
+
+@bp.route('/live/random', strict_slashes=False, methods=['GET', 'POST'])
+def live_random():
+    global qa_pairs
+
+    data = json.loads(request.data)
+
+    pair_num = random.randint(0, len(qa_pairs) - 1)
+
+    row = qa_pairs.iloc[pair_num]
+    correct_answers = answer_texts.loc[row['answer_ids']]['answer'].values
+    wrong_answers = answer_texts.loc[row['pool']]['answer'].values
+    question = row['question']
+
+    return jsonify({'question': question,
+                    'wrong_answers': wrong_answers.tolist(),
+                    'correct_answers': correct_answers.tolist(),
+                    'pair_num': pair_num,
+                    })
+
+
+@bp.route('/live', strict_slashes=False, methods=['GET', 'POST'])
+def live():
+    global answer_texts, qa_pairs, vocabulary_inv, model
+
+    data = json.loads(request.data)
+
+    perplexity = data['perplexity']
+    scale = data['scale']
+    neuron_display = data['neuron']
+    if neuron_display > -1:
+        neuron_display = int(neuron_display)
+
+    correct_answers = []
+    for ca in data['correct_answers'].split('\n'):
+        if ca.strip() != '':
+            correct_answers.append(ca)
+    wrong_answers = []
+    for wa in data['wrong_answers'].split('\n'):
+        if wa.strip() != '':
+            wrong_answers.append(wa)
+    question = data['question']
+    q_tokens, q_padded_tokens = prepare_data([question])
+    ca_tokens, ca_padded_tokens = prepare_data(correct_answers)
+    wa_tokens, wa_padded_tokens = prepare_data(wrong_answers)
+    all_function_deep, output_function_deep = visualize_model_deep(model, False)
+    if len(correct_answers) > 0:
+        scores_ca, rnn_values_ca = all_function_deep([q_padded_tokens * len(correct_answers), ca_padded_tokens])
+        neuron_num = rnn_values_ca.shape[-1]
+    else:
+        scores_ca = []
+        rnn_values_ca = []
+    if len(wrong_answers) > 0:
+        scores_wa, rnn_values_wa = all_function_deep([q_padded_tokens * len(wrong_answers), wa_padded_tokens])
+        neuron_num = rnn_values_wa.shape[-1]
+    else:
+        scores_wa = []
+        rnn_values_wa = []
+
+    # generate TSNE
+    labels = ['q'] + ['ca'] * len(correct_answers) + ['wa'] * len(wrong_answers)
+    model_dict_wa = {}
+    model_dict_ca = {}
+    if len(correct_answers) > 0:
+        model_dict_ca = {i + 1: np.max(rnn_values_ca[i, :, :], axis=1) for i in range(len(correct_answers))}
+    if len(wrong_answers) > 0:
+        model_dict_wa = {i + 1: np.max(rnn_values_wa[i - len(correct_answers), :, :], axis=1) for i in
+                         range(len(correct_answers), len(wrong_answers) + len(correct_answers))}
+    model_dict = {**model_dict_ca, **model_dict_wa}
+    all_function_deep_q, output_function_deep_q = visualize_model_deep(model, True)
+    _, rnn_values = all_function_deep_q([q_padded_tokens, [ca_padded_tokens[0]]])
+    question_vector = rnn_values[0]
+    model_dict[0] = np.max(question_vector, axis=1)
+    plotly_tsne = tsne_plot(model_dict, labels, correct_answers, wrong_answers, question, perplexity)
+
+    # plotly
+    pl_ca_heatmaps = []
+    pl_wa_heatmaps = []
+    # generate heatmaps
+    # plotly
+    if len(correct_answers) > 0:
+        for idx in range(0, len(ca_tokens)):
+            words = [vocabulary_inv[x] for x in ca_tokens[idx]]
+            heatmap_points = {'z': rnn_values_ca[idx, -len(ca_tokens[idx]):, :].tolist(),
+                              'y': words,
+                              'type': 'heatmap'}
+            pl_ca_heatmaps.append(heatmap_points)
+    # Same as above, but for wrong answers
+    if len(wrong_answers) > 0:
+        for idx in range(0, len(wa_tokens)):
+            words = [vocabulary_inv[x] for x in wa_tokens[idx]]
+            heatmap_points = {'z': rnn_values_wa[idx, -len(wa_tokens[idx]):, :].tolist(),
+                              'y': words,
+                              'type': 'heatmap'}
+            pl_wa_heatmaps.append(heatmap_points)
+
+    # generate text highlighting based on neuron activity
+    highlighted_correct_answers = correct_answers
+    highlighted_wrong_answers = wrong_answers
+
+    if neuron_display > -1:
+        highlighted_correct_answers = highlight_neuron(rnn_values_ca, correct_answers, ca_tokens, scale,
+                                                       neuron_display)
+        highlighted_wrong_answers = highlight_neuron(rnn_values_wa, wrong_answers, wa_tokens, scale, neuron_display)
+
+    # Convert ndarrays to lists
+    if len(scores_ca) > 0:
+        scores_ca = scores_ca.tolist()
+    if len(scores_wa) > 0:
+        scores_wa = scores_wa.tolist()
+
+    return jsonify({'question': question,
+                    'highlighted_wrong_answers': highlighted_wrong_answers,
+                    'highlighted_correct_answers': highlighted_correct_answers,
+                    'wrong_answers': wrong_answers,
+                    'correct_answers': correct_answers,
+                    'perplexity': perplexity,
+                    'neuron_display': neuron_display,
                     'scale': scale,
                     'texts_len': len(qa_pairs),
                     'scores_ca': scores_ca,
