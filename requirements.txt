@@ -1,6 +1,6 @@
 Flask==1.0.2
 hunspell==0.5.5
-numpy==1.16.2
+numpy==1.22.0
 editdistance==0.5.2
 gensim==3.7.1
 Keras==2.2.4
